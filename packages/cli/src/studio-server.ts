@@ -355,7 +355,7 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
           userText,
           attachments,
         });
-        const phaseInfo = detectPhase(history, userText);
+        const phaseInfo = detectPhase(history, userText, !!project.templateId);
         const t0 = Date.now();
         // Save the prompt next to the project so we can inspect what we sent.
         // Also dump the previous one as .prev for diffing across turns.
@@ -778,77 +778,222 @@ interface Attachment {
  * extracts a fenced ```html block if present; if not, it's just a chat reply.
  */
 /**
- * Recognise which phase the conversation is in so we can hand the agent a
- * single, narrow prompt. State machine (see RFC-07 — flow chart):
+ * Conversation phases — fully sequential. Each card the assistant emits has
+ * a `meta.phase` JSON field so the server can route the user's reply without
+ * guessing.
  *
- *   opener    → first short / vague user message; expect hv-options card
- *               for content-type pick
- *   info      → user picked an option → expect hv-form to collect
- *               brand / headline / data / aspect / duration / frame_count / style
- *   confirm   → user submitted hv-form ([hv-form:submit]\n<json>) →
- *               expect hv-confirm card
- *   generate  → user clicked "✓ 开始生成" ([hv-confirm:generate]) →
- *               this is the only turn that may emit HTML / content-graph
- *   info-edit → user clicked "✏️ 修改" ([hv-confirm:edit]) →
- *               re-emit hv-form with `default` values prefilled
- *   iterate   → after a successful generate, the user free-forms more
- *               revisions on the rendered HTML (the v0.7 path)
+ *   opener  → hv-options{meta.phase:"type"}  → user picks content type
+ *   content → free chat: agent asks about topic / headline / data, user
+ *             can answer in 1+ turns or say "skip" / "随便"
+ *   style   → hv-options{meta.phase:"style"} → user picks style preset
+ *             (skipped automatically if a project template is already set)
+ *   format  → hv-form{meta.phase:"format"}   → 3 segmented controls
+ *             (aspect, duration, frame_count)
+ *   confirm → hv-confirm{meta.phase:"confirm"} →  ✓ generate / ✏️ edit
+ *   generate → emits HTML / content-graph + frames
+ *
+ *   info-edit → user clicked edit on confirm; re-emit format hv-form
+ *   iterate   → after successful generate, free-form revision pass
  */
-type ConvPhase = 'opener' | 'info' | 'info-edit' | 'confirm' | 'generate' | 'iterate';
+type ConvPhase =
+  | 'opener'
+  | 'content'
+  | 'style'
+  | 'format'
+  | 'format-edit'
+  | 'confirm'
+  | 'generate'
+  | 'iterate';
 
 interface PhaseInputs {
-  collected?: Record<string, string>; // last submitted hv-form values
-  pickedType?: string;                // label from the opener hv-options card
+  collected?: Record<string, string>; // last submitted hv-form values (format only)
+  pickedType?: string;
+  pickedStyle?: string;
+  contentTurns?: string[];            // free-text user messages between type-pick and style/format
 }
 
-function detectPhase(history: ChatMessage[], userText: string): { phase: ConvPhase; inputs: PhaseInputs } {
+function detectPhase(
+  history: ChatMessage[],
+  userText: string,
+  hasTemplate: boolean,
+): { phase: ConvPhase; inputs: PhaseInputs } {
   const trimmed = userText.trim();
   const inputs: PhaseInputs = {};
 
-  // Look at the latest meaningful exchange. A user turn can be one of:
-  //   "[hv-form:submit]\n<json>"   → previous card was hv-form, now confirm
-  //   "[hv-confirm:generate]"      → run the generator
-  //   "[hv-confirm:edit]"          → re-show the form, pre-filled
-  //   anything else                → pick by previous assistant card kind
+  // Explicit markers always win.
   if (trimmed.startsWith('[hv-form:submit]')) {
     const body = trimmed.slice('[hv-form:submit]'.length).trim();
-    try { inputs.collected = JSON.parse(body); } catch { /* leave undefined */ }
+    try { inputs.collected = JSON.parse(body); } catch { /* ignore */ }
     return { phase: 'confirm', inputs };
   }
   if (trimmed === '[hv-confirm:generate]') {
     inputs.collected = lastFormSubmission(history);
-    inputs.pickedType = lastTypePick(history);
+    inputs.pickedType = lastCardPickByPhase(history, 'type');
+    inputs.pickedStyle = lastCardPickByPhase(history, 'style') ?? '';
+    inputs.contentTurns = collectContentTurns(history);
     return { phase: 'generate', inputs };
   }
   if (trimmed === '[hv-confirm:edit]') {
     inputs.collected = lastFormSubmission(history);
-    return { phase: 'info-edit', inputs };
+    return { phase: 'format-edit', inputs };
   }
 
-  // Without an explicit marker — what was the previous assistant card?
-  const prevCard = lastAssistantCardKind(history);
-  if (prevCard === 'hv-options') {
-    // User answered the opener type-pick card.
-    inputs.pickedType = trimmed;
-    return { phase: 'info', inputs };
-  }
-  if (prevCard === 'hv-form' || prevCard === 'hv-confirm') {
-    // Free-form text after a form/confirm card means the user typed
-    // something instead of using the buttons. Fall through to iterate so
-    // the agent can interpret it.
-    inputs.collected = lastFormSubmission(history);
-    return { phase: 'iterate', inputs };
-  }
-
-  // No prior card. Either truly first turn, or post-generation iteration.
+  // Has any successful generation already happened? Then this is iteration.
   const hadGeneration = history.some(
     (m) => m.role === 'assistant' && /```html|```json#content-graph|✓\s/i.test(m.content),
   );
-  if (hadGeneration) return { phase: 'iterate', inputs: { collected: lastFormSubmission(history) } };
+  if (hadGeneration) {
+    return { phase: 'iterate', inputs: { collected: lastFormSubmission(history) } };
+  }
 
-  return { phase: 'opener', inputs };
+  // Walk backwards; what was the most recent CARD with a meta.phase tag?
+  // (Skip empty / warning assistant turns.)
+  const prev = lastAssistantCardWithMeta(history);
+
+  if (!prev) {
+    // No prior card → opener.
+    return { phase: 'opener', inputs };
+  }
+
+  // Last card was an opener type-pick → user just answered with their type.
+  if (prev.kind === 'hv-options' && prev.metaPhase === 'type') {
+    inputs.pickedType = trimmed;
+    return { phase: 'content', inputs };
+  }
+
+  // Last card was a style-pick → user answered with style choice.
+  if (prev.kind === 'hv-options' && prev.metaPhase === 'style') {
+    inputs.pickedType = lastCardPickByPhase(history, 'type');
+    inputs.pickedStyle = trimmed;
+    inputs.contentTurns = collectContentTurns(history);
+    return { phase: 'format', inputs };
+  }
+
+  // Last card was content-question (a plain assistant message asking for content).
+  // We detect this by phase metadata in a hidden HTML comment we embed.
+  if (prev.kind === 'content-question') {
+    // User is replying to content question. Could be (a) more content, or
+    // (b) a "skip / I'm done" signal.
+    const isSkip = /^(skip|跳过|够了|够|done|next|下一步|ok|好|不知道)$/i.test(trimmed)
+      || trimmed.length <= 3;
+    if (isSkip || hasEnoughContent(history, trimmed)) {
+      // Move forward: style if no template, else format.
+      inputs.pickedType = lastCardPickByPhase(history, 'type');
+      inputs.contentTurns = [...collectContentTurns(history), trimmed];
+      return hasTemplate
+        ? { phase: 'format', inputs }
+        : { phase: 'style', inputs };
+    }
+    // Continue chatting (still in content phase).
+    inputs.pickedType = lastCardPickByPhase(history, 'type');
+    inputs.contentTurns = [...collectContentTurns(history), trimmed];
+    return { phase: 'content', inputs };
+  }
+
+  // Default fallback: treat as iterate.
+  inputs.collected = lastFormSubmission(history);
+  return { phase: 'iterate', inputs };
 }
 
+/** Heuristic: how many content turns has the user given. Beyond 2 we move on. */
+function hasEnoughContent(history: ChatMessage[], pending: string): boolean {
+  const turns = collectContentTurns(history);
+  return turns.length >= 2 || (turns.length >= 1 && pending.length > 60);
+}
+
+/** Find the most recent assistant card with a meta.phase, plus its kind. */
+function lastAssistantCardWithMeta(history: ChatMessage[]): {
+  kind: 'hv-options' | 'hv-form' | 'hv-confirm' | 'content-question';
+  metaPhase: string | null;
+} | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i]!;
+    if (m.role !== 'assistant') continue;
+    const c = m.content;
+    if (!c.trim() || /^⚠️/.test(c.trim())) continue;
+    // Try each card kind, JSON-parse the body, look for meta.phase.
+    const cards: { kind: 'hv-options' | 'hv-form' | 'hv-confirm'; re: RegExp }[] = [
+      { kind: 'hv-confirm', re: /```hv-confirm\s*\n([\s\S]*?)```/i },
+      { kind: 'hv-form',    re: /```hv-form\s*\n([\s\S]*?)```/i },
+      { kind: 'hv-options', re: /```hv-options\s*\n([\s\S]*?)```/i },
+    ];
+    for (const { kind, re } of cards) {
+      const match = re.exec(c);
+      if (match && match[1]) {
+        let metaPhase: string | null = null;
+        try {
+          const parsed = JSON.parse(match[1].trim());
+          metaPhase = parsed?.meta?.phase ?? null;
+        } catch { /* unparseable card body — treat as untagged */ }
+        return { kind, metaPhase };
+      }
+    }
+    // No card → was this a content-question? Look for our marker.
+    if (/<!--\s*hv-phase:content-question\s*-->/i.test(c)) {
+      return { kind: 'content-question', metaPhase: 'content' };
+    }
+    // A real assistant turn with no card and no marker — bail.
+    return null;
+  }
+  return null;
+}
+
+/** Look back for the user message that answered an hv-options card with meta.phase=X. */
+function lastCardPickByPhase(history: ChatMessage[], phase: string): string | undefined {
+  for (let i = 0; i < history.length - 1; i++) {
+    const a = history[i]!;
+    const u = history[i + 1]!;
+    if (a.role !== 'assistant' || u.role !== 'user') continue;
+    const m = /```hv-options\s*\n([\s\S]*?)```/i.exec(a.content);
+    if (!m || !m[1]) continue;
+    try {
+      const parsed = JSON.parse(m[1].trim());
+      if (parsed?.meta?.phase === phase) return u.content.trim();
+    } catch { /* ignore */ }
+  }
+  return undefined;
+}
+
+/** All free-text user replies during the content phase (between type-pick and style/format). */
+function collectContentTurns(history: ChatMessage[]): string[] {
+  const out: string[] = [];
+  let inContent = false;
+  for (let i = 0; i < history.length; i++) {
+    const m = history[i]!;
+    if (m.role === 'assistant') {
+      const c = m.content;
+      // Type pick assistant card opens content phase
+      const typeMatch = /```hv-options\s*\n([\s\S]*?)```/i.exec(c);
+      if (typeMatch && typeMatch[1]) {
+        try {
+          const parsed = JSON.parse(typeMatch[1].trim());
+          if (parsed?.meta?.phase === 'type') { inContent = true; continue; }
+          if (parsed?.meta?.phase === 'style') { inContent = false; continue; }
+        } catch { /* ignore */ }
+      }
+      if (/```hv-form\s*\n/i.test(c)) inContent = false;
+      continue;
+    }
+    if (m.role !== 'user') continue;
+    if (!inContent) continue;
+    const t = m.content.trim();
+    if (!t) continue;
+    if (t.startsWith('[hv-')) continue; // skip marker messages
+    // Skip the "trimmed answer" that picks the type — it's the first user turn
+    // immediately after the type card; keep only later ones.
+    if (out.length === 0) {
+      // The very first user turn after a type card IS the type pick. Skip it.
+      // (Subsequent turns in content phase get collected.)
+      out.push('__TYPE_PICK__');
+      continue;
+    }
+    out.push(t);
+  }
+  return out.filter((t) => t !== '__TYPE_PICK__');
+}
+
+// Legacy helper retained for backward calls — now delegates to detectPhase's
+// metadata-aware lookup.
 function lastAssistantCardKind(history: ChatMessage[]): 'hv-options' | 'hv-form' | 'hv-confirm' | null {
   for (let i = history.length - 1; i >= 0; i--) {
     const m = history[i]!;
@@ -894,9 +1039,9 @@ function buildHtmlGenerationPrompt(args: BuildPromptArgs): string {
 
   const baseHtml = priorHtml && priorHtml !== exampleHtml ? priorHtml : exampleHtml;
   const trimmed = userText.trim();
-  const { phase, inputs } = detectPhase(history, userText);
+  const { phase, inputs } = detectPhase(history, userText, !!tmpl);
 
-  // ---- opener ----
+  // ---- opener: hv-options card with meta.phase = "type" ----
   if (phase === 'opener') {
     const opener: string[] = [];
     opener.push(
@@ -904,28 +1049,25 @@ function buildHtmlGenerationPrompt(args: BuildPromptArgs): string {
     );
     opener.push('');
     opener.push(`Reply with TWO things, in this exact order:`);
-    opener.push(
-      `1. ONE friendly opening sentence in the user's language (≤ 25 chars), e.g. "你好！想做点什么？" or "Hi! What kind of video?".`,
-    );
-    opener.push(
-      `2. A fenced \`\`\`hv-options block with 4 content-type choices and allow_freeform: true. JSON shape:`,
-    );
-    opener.push('   ```hv-options');
-    opener.push('   {');
-    opener.push('     "question": "想做哪种内容？" or "What kind?",');
-    opener.push('     "options": [');
-    opener.push('       { "label": "单帧标题卡", "hint": "logo / 封面 / 单画面 - 5-10s" },');
-    opener.push('       { "label": "多帧预告片", "hint": "产品 / 活动 teaser, 3-6 帧" },');
-    opener.push('       { "label": "数据大字报", "hint": "1-2 个核心数字, 社媒爆款风" },');
-    opener.push('       { "label": "概念解说短片", "hint": "几帧讲清一个 idea / feature" }');
-    opener.push('     ],');
-    opener.push('     "allow_freeform": true');
-    opener.push('   }');
-    opener.push('   ```');
+    opener.push(`1. ONE friendly opening sentence in the user's language (≤ 25 chars).`);
+    opener.push(`2. A fenced \`\`\`hv-options block with the 4 content-type choices below. JSON shape EXACTLY as shown — do not change keys or omit "meta":`);
+    opener.push('```hv-options');
+    opener.push(JSON.stringify({
+      meta: { phase: 'type' },
+      question: '想做哪种内容？',
+      options: [
+        { label: '单帧标题卡',   hint: 'logo / 封面 / 单画面 - 5-10s' },
+        { label: '多帧预告片',   hint: '产品 / 活动 teaser, 3-6 帧' },
+        { label: '数据大字报',   hint: '1-2 个核心数字, 社媒爆款风' },
+        { label: '概念解说短片', hint: '几帧讲清一个 idea / feature' },
+      ],
+      allow_freeform: true,
+    }, null, 2));
+    opener.push('```');
     opener.push('');
     if (tmpl) {
       opener.push(
-        `Note: a template "${tmpl.name}" is currently selected (${tmpl.description}), but treat it as a visual style reference only — content type still drives the structure.`,
+        `Note: a template "${tmpl.name}" is currently selected (${tmpl.description}). Treat it as a visual style reference only — content type still drives the structure.`,
       );
       opener.push('');
     }
@@ -933,59 +1075,125 @@ function buildHtmlGenerationPrompt(args: BuildPromptArgs): string {
     return opener.join('\n');
   }
 
-  // ---- info / info-edit: emit hv-form ----
-  if (phase === 'info' || phase === 'info-edit') {
-    const isEdit = phase === 'info-edit';
-    const pre = inputs.collected ?? {};
-    const pickedType = isEdit ? lastTypePick(history) : inputs.pickedType;
-    const isMulti = !!pickedType && /多帧|预告|时间线|对比|讲解|teaser|explainer|comparison|timeline/i.test(pickedType);
-    const defaults = {
-      topic: pre.topic ?? '',
-      headline: pre.headline ?? '',
-      data: pre.data ?? '',
-      aspect: pre.aspect ?? '16:9',
-      duration: pre.duration ?? (isMulti ? '15' : '5'),
-      frame_count: pre.frame_count ?? (isMulti ? '4' : '1'),
-      style: pre.style ?? '',
-    };
+  // ---- content: free chat asking about topic / headline / data ----
+  if (phase === 'content') {
+    const pickedType = inputs.pickedType ?? '';
+    const turns = inputs.contentTurns ?? [];
     const p: string[] = [];
-    if (isEdit) {
-      p.push(`The user wants to revise the inputs they submitted earlier. Re-emit the SAME hv-form card with each \`default\` field set to their last answer so they only have to change what they want.`);
+    p.push(`The user is making a ${pickedType ? `"${pickedType}"` : 'video'}. Collect concrete content for it via natural conversation — DO NOT emit any code block, hv-options, hv-form, or hv-confirm. End your reply with this hidden marker on its own line so the server knows you're still in the content phase:`);
+    p.push('<!-- hv-phase:content-question -->');
+    p.push('');
+    p.push(`Goal: surface what the video is ABOUT (topic, brand / project name, headline / tagline, key numbers or data points). The user can answer, partially answer, or say "随便发挥 / skip / 不知道" — accept whatever they give and move on.`);
+    p.push('');
+    if (turns.length === 0) {
+      p.push(`This is the first content turn. Ask 1–3 short, sharp questions, in the user's language. Keep it under 60 words. Mention they can answer fully, partially, or just say "skip" / "随便".`);
     } else {
-      p.push(`The user picked "${pickedType ?? 'a content type'}". Now collect the concrete inputs needed to generate the video — emit ONE \`\`\`hv-form block with the fields below, and a brief one-line preamble in the user's language inviting them to fill it in.`);
+      p.push(`The user has already shared:`);
+      for (const t of turns) p.push(`  - ${t.slice(0, 200)}`);
+      p.push('');
+      p.push(`Either ask ONE more clarifying question, or — if you have enough — write a one-line confirmation like "好，我有思路了，下一步是风格" / "Got it. Next: style." and end with the marker. The server will move on to style automatically when your reply is short / affirmative or when this is your second clarifying round.`);
     }
     p.push('');
-    p.push('```hv-form');
+    p.push(`Reply in plain text + the marker. NO code blocks. Do NOT return an empty reply.`);
+    return p.join('\n');
+  }
+
+  // ---- style: hv-options card with style presets + "pick template" + freeform ----
+  if (phase === 'style') {
+    const pickedType = inputs.pickedType ?? '';
+    const p: string[] = [];
+    p.push(`The user has shared their content for a "${pickedType}". Now ask them about visual style with ONE hv-options card. JSON shape EXACTLY as shown — keep "meta" verbatim:`);
+    p.push('```hv-options');
     p.push(JSON.stringify({
-      title: isEdit ? '改一下这些信息' : '讲一下你想做的视频…',
-      fields: [
-        { key: 'topic',       label: '主题 / 是关于什么的',  kind: 'text',     placeholder: '例如：nexu-io 产品发布', required: true, default: defaults.topic },
-        { key: 'headline',    label: 'Headline / 主标题',     kind: 'text',     placeholder: '例如：The Self-Evolving Design Agent', required: true, default: defaults.headline },
-        { key: 'data',        label: '关键数字 / 数据 (可选)', kind: 'textarea', placeholder: '例如：50K stars in 25 days\nTemplates: 231 / Skills: 15', default: defaults.data },
-        { key: 'aspect',      label: '画面尺寸',              kind: 'select',   options: ['16:9 横屏','9:16 手机竖屏','1:1 方形','4:5 小红书'], required: true, default: defaults.aspect.length === 3 || defaults.aspect.length === 4 ? `${defaults.aspect}${defaults.aspect === '16:9' ? ' 横屏' : defaults.aspect === '9:16' ? ' 手机竖屏' : defaults.aspect === '1:1' ? ' 方形' : ' 小红书'}` : defaults.aspect },
-        { key: 'duration',    label: '时长 (秒)',             kind: 'select',   options: ['3','5','10','15','30'], required: true, default: defaults.duration },
-        { key: 'frame_count', label: isMulti ? '帧数 (画面数)' : '帧数', kind: 'text', placeholder: isMulti ? '例如：4' : '单帧 = 1', required: true, default: defaults.frame_count },
-        { key: 'style',       label: '风格描述 (可选)',       kind: 'textarea', placeholder: '例如：cyberpunk glitch / Swiss minimalist', default: defaults.style },
+      meta: { phase: 'style' },
+      question: '视觉风格怎么定？',
+      options: [
+        { label: 'Cyberpunk glitch',   hint: '霓虹 / 故障感 / 高对比' },
+        { label: 'Swiss minimalist',   hint: '网格 / 无衬线 / 留白' },
+        { label: 'Warm-grain magazine',hint: '纸感 / 衬线 / 暖色' },
+        { label: 'Mono brutalist',     hint: '黑白 / 块状 / 粗体' },
+        { label: '从设计模板选',       hint: '上方挑一个现成模板' },
       ],
-      allow_attachments: true,
+      allow_freeform: true,
     }, null, 2));
     p.push('```');
     p.push('');
-    p.push(`Do NOT write HTML this turn. Do NOT return an empty reply. The hv-form block is REQUIRED.`);
+    p.push(`Add ONE short sentence above the card in the user's language inviting them to pick or describe a vibe. Mention they can also upload a reference image via the 📎 button.`);
+    p.push('');
+    p.push(`Do NOT write HTML this turn. Do NOT return an empty reply.`);
+    return p.join('\n');
+  }
+
+  // ---- format / format-edit: hv-form with 3 segmented controls ----
+  if (phase === 'format' || phase === 'format-edit') {
+    const isEdit = phase === 'format-edit';
+    const pre = inputs.collected ?? {};
+    const pickedType = isEdit
+      ? lastCardPickByPhase(history, 'type') ?? ''
+      : (inputs.pickedType ?? '');
+    const isMulti = !!pickedType && /多帧|预告|时间线|对比|讲解|teaser|explainer|comparison|timeline/i.test(pickedType);
+    const defaults = {
+      aspect:      pre.aspect      ?? '16:9 横屏',
+      duration:    pre.duration    ?? (isMulti ? '15' : '5'),
+      frame_count: pre.frame_count ?? (isMulti ? '4' : '1'),
+    };
+    const p: string[] = [];
+    if (isEdit) {
+      p.push(`The user wants to revise the format. Re-emit the SAME hv-form card with each \`default\` set to their last answer so they only need to change what they want.`);
+    } else {
+      p.push(`Now ask about format with ONE hv-form card — three segmented controls, no text inputs. JSON shape EXACTLY as shown — keep "meta" verbatim:`);
+    }
+    p.push('```hv-form');
+    p.push(JSON.stringify({
+      meta: { phase: 'format' },
+      title: isEdit ? '改一下格式' : '最后一步：选个尺寸 / 时长 / 帧数',
+      fields: [
+        {
+          key: 'aspect', label: '画面尺寸', kind: 'buttons', required: true,
+          default: defaults.aspect,
+          options: [
+            { value: '16:9 横屏',     label: '16:9 横屏' },
+            { value: '9:16 手机竖屏', label: '9:16 竖屏' },
+            { value: '1:1 方形',      label: '1:1 方形' },
+            { value: '4:5 小红书',    label: '4:5 小红书' },
+          ],
+        },
+        {
+          key: 'duration', label: '时长 (秒)', kind: 'buttons', required: true,
+          default: defaults.duration,
+          options: ['3', '5', '10', '15', '30'].map((v) => ({ value: v, label: `${v}s` })),
+        },
+        {
+          key: 'frame_count', label: '帧数', kind: 'buttons', required: true,
+          default: defaults.frame_count,
+          options: ['1', '2', '3', '4', '5', '6'].map((v) => ({ value: v, label: v })),
+        },
+      ],
+      allow_attachments: false,
+    }, null, 2));
+    p.push('```');
+    p.push('');
+    p.push(`Do NOT write HTML this turn. Do NOT return an empty reply.`);
     return p.join('\n');
   }
 
   // ---- confirm: emit hv-confirm summarising what was collected ----
   if (phase === 'confirm') {
     const collected = inputs.collected ?? {};
-    const pickedType = lastTypePick(history) ?? '';
+    const pickedType = lastCardPickByPhase(history, 'type') ?? '';
+    const pickedStyle = lastCardPickByPhase(history, 'style') ?? '';
+    const contentTurns = collectContentTurns(history);
     const summaryRows: { label: string; value: string }[] = [];
     if (pickedType) summaryRows.push({ label: '类型', value: pickedType });
+    if (contentTurns.length > 0) {
+      summaryRows.push({ label: '内容', value: contentTurns.join(' · ').slice(0, 240) });
+    }
+    if (pickedStyle) summaryRows.push({ label: '风格', value: pickedStyle });
+    if (tmpl) summaryRows.push({ label: '模板', value: tmpl.name });
     const labelMap: Record<string, string> = {
-      topic: '主题', headline: 'Headline', data: '数据', aspect: '尺寸',
-      duration: '时长', frame_count: '帧数', style: '风格',
+      aspect: '尺寸', duration: '时长', frame_count: '帧数',
     };
-    for (const k of ['topic', 'headline', 'data', 'aspect', 'duration', 'frame_count', 'style']) {
+    for (const k of ['aspect', 'duration', 'frame_count']) {
       const v = collected[k];
       if (v) summaryRows.push({ label: labelMap[k] ?? k, value: v });
     }
@@ -994,10 +1202,11 @@ function buildHtmlGenerationPrompt(args: BuildPromptArgs): string {
     }
 
     const p: string[] = [];
-    p.push(`The user has filled in their inputs. Emit ONE \`\`\`hv-confirm block (no other code blocks) summarising what you've got, in the user's language. Use this exact JSON:`);
+    p.push(`The user has chosen the format. Emit ONE \`\`\`hv-confirm block (no other code blocks) summarising what you've got, in the user's language. Use this exact JSON — keep "meta":`);
     p.push('');
     p.push('```hv-confirm');
     p.push(JSON.stringify({
+      meta: { phase: 'confirm' },
       title: '按这些信息生成？',
       summary: summaryRows,
       actions: ['generate', 'edit'],
@@ -1012,6 +1221,8 @@ function buildHtmlGenerationPrompt(args: BuildPromptArgs): string {
   if (phase === 'generate') {
     const collected = inputs.collected ?? {};
     const pickedType = inputs.pickedType ?? '';
+    const pickedStyle = inputs.pickedStyle ?? '';
+    const contentTurns = inputs.contentTurns ?? [];
     const aspect = ((collected.aspect ?? '16:9').split(/\s+/)[0] ?? '16:9'); // strip "16:9 横屏" → "16:9"
     const [w, h] = aspect.includes(':') ? aspect.split(':').map(Number) : [16, 9];
     const isMulti = /多帧|预告|时间线|对比|讲解|teaser|explainer|comparison|timeline/i.test(pickedType)
@@ -1023,15 +1234,22 @@ function buildHtmlGenerationPrompt(args: BuildPromptArgs): string {
     else if (aspect === '1:1') resolution = '1080×1080';
     else if (aspect === '4:5') resolution = '1080×1350';
 
+    const styleLabel = pickedStyle && /^从设计模板选|template/i.test(pickedStyle)
+      ? (tmpl ? `(use the selected template "${tmpl.name}" — ${tmpl.description})` : '(let the model choose)')
+      : pickedStyle;
+
     const p: string[] = [];
     p.push(`Generate the HTML video file(s) the user just confirmed.`);
     p.push('');
-    p.push(`Inputs (use these LITERALLY — do NOT make up brand names or facts):`);
+    p.push(`Inputs (use these LITERALLY — do NOT make up brand names or facts beyond what is stated):`);
     p.push(`- 类型 / type: ${pickedType || '(未指定)'}`);
-    if (collected.topic)       p.push(`- 主题 / topic: ${collected.topic}`);
-    if (collected.headline)    p.push(`- Headline: ${collected.headline}`);
-    if (collected.data)        p.push(`- 关键数字 / data:\n  ${collected.data.replace(/\n/g, '\n  ')}`);
-    if (collected.style)       p.push(`- 风格: ${collected.style}`);
+    if (contentTurns.length > 0) {
+      p.push(`- 内容 / content (what the user told us in the chat):`);
+      for (const t of contentTurns) p.push(`  · ${t.replace(/\n/g, ' ').slice(0, 280)}`);
+    } else {
+      p.push(`- 内容 / content: (the user did not specify; pick a sensible default that fits the type, but keep it generic — no fake brand names)`);
+    }
+    if (styleLabel) p.push(`- 风格 / style: ${styleLabel}`);
     p.push(`- 画面尺寸: ${aspect} (${resolution})`);
     p.push(`- 时长: ${collected.duration ?? '?'} 秒`);
     p.push(`- 帧数: ${collected.frame_count ?? (isMulti ? '4' : '1')}`);

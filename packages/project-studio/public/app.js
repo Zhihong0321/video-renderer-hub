@@ -576,6 +576,19 @@ function renderChatLog() {
   // hv-form: collect field values + optional file attachments, submit as
   // [hv-form:submit]\n<json>. Files go through the existing pendingAttachments
   // path so the server multipart handler treats them like normal uploads.
+  // Segmented buttons: click writes to the hidden input + flips .selected.
+  log.querySelectorAll('.form-seg-btn[data-form-msg]').forEach((btn) => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      if (btn.disabled) return;
+      const seg = btn.closest('.form-seg');
+      if (!seg) return;
+      seg.querySelectorAll('.form-seg-btn').forEach((b) => b.classList.remove('selected'));
+      btn.classList.add('selected');
+      const hidden = seg.querySelector('input[type="hidden"]');
+      if (hidden) hidden.value = btn.dataset.val ?? '';
+    };
+  });
   log.querySelectorAll('button.form-submit[data-form-msg]').forEach((btn) => {
     btn.onclick = async () => {
       const msgIdx = Number(btn.dataset.formMsg);
@@ -585,10 +598,19 @@ function renderChatLog() {
       if (!card) return;
       const collected = {};
       let missing = null;
-      card.querySelectorAll('[data-form-key]').forEach((el) => {
+      // Only grab inputs / textareas / selects — buttons share the data-form-key
+      // attribute but their .value is empty, would clobber the real one.
+      card.querySelectorAll(
+        'input[data-form-key], textarea[data-form-key], select[data-form-key]',
+      ).forEach((el) => {
         const key = el.dataset.formKey;
         const val = (el.value || '').trim();
-        if (!val && el.previousElementSibling?.querySelector('.req')) missing = key;
+        if (!val && card.querySelector(`label .req`) &&
+            card.querySelector(`[data-form-key="${CSS.escape(key)}"]`).closest('.form-field')
+              ?.querySelector('label .req')) {
+          // Required field that's empty
+          missing = key;
+        }
         collected[key] = val;
       });
       if (missing) {
@@ -828,6 +850,19 @@ function renderFormCard(form, submitted, msgIdx) {
         return `<option value="${esc(v)}" ${sel}>${esc(lbl)}</option>`;
       }).join('');
       control = `<select data-form-msg="${msgIdx}" data-form-key="${esc(key)}" ${dis}>${opts}</select>`;
+    } else if (f.kind === 'buttons') {
+      // Segmented control: a hidden input carries the value, visible buttons
+      // toggle. Wired up in renderChatLog.
+      const optsHtml = (f.options || []).map((o) => {
+        const v = typeof o === 'string' ? o : o.value;
+        const lbl = typeof o === 'string' ? o : (o.label || o.value);
+        const sel = String(v) === String(def) ? 'selected' : '';
+        return `<button type="button" class="form-seg-btn ${sel}" data-form-msg="${msgIdx}" data-form-key="${esc(key)}" data-val="${esc(v)}" ${dis}>${esc(lbl)}</button>`;
+      }).join('');
+      control = `<div class="form-seg" data-form-key="${esc(key)}">
+        <input type="hidden" data-form-msg="${msgIdx}" data-form-key="${esc(key)}" value="${esc(def)}" />
+        ${optsHtml}
+      </div>`;
     } else {
       control = `<input type="text" data-form-msg="${msgIdx}" data-form-key="${esc(key)}" placeholder="${esc(ph)}" value="${esc(def)}" ${dis} />`;
     }
