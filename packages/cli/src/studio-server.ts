@@ -343,6 +343,23 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
           userText,
           attachments,
         });
+        const phaseInfo = detectPhase(history, userText);
+        const t0 = Date.now();
+        // Save the prompt next to the project so we can inspect what we sent.
+        // Also dump the previous one as .prev for diffing across turns.
+        const promptDumpPath = join(projectDir, 'last-prompt.txt');
+        try {
+          if (existsSync(promptDumpPath)) {
+            const prev = await readFile(promptDumpPath, 'utf8');
+            const fs = await import('node:fs/promises');
+            await fs.writeFile(join(projectDir, 'last-prompt.prev.txt'), prev, 'utf8');
+          }
+          const fs = await import('node:fs/promises');
+          await fs.writeFile(promptDumpPath, fullPrompt, 'utf8');
+        } catch {/* non-fatal */}
+        process.stderr.write(
+          `[studio:msg] proj=${id} phase=${phaseInfo.phase} prompt=${fullPrompt.length}B user=${JSON.stringify(userText.slice(0, 80))} attachments=${attachments.length}\n`,
+        );
 
         // SSE response
         res.writeHead(200, {
@@ -352,6 +369,7 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
         });
 
         let assistantText = '';
+        let textChunks = 0;
         const handle = spawnAgent({
           def: agentDef,
           prompt: fullPrompt,
@@ -359,13 +377,21 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
           onEvent: (ev) => {
             if (ev.type === 'text') {
               assistantText += ev.chunk;
+              textChunks += 1;
               res.write(`data: ${JSON.stringify(ev)}\n\n`);
             } else if (ev.type === 'error' || ev.type === 'message_end') {
+              if (ev.type === 'error') {
+                process.stderr.write(`[studio:msg] proj=${id} agent-error: ${ev.message}\n`);
+              }
               res.write(`data: ${JSON.stringify(ev)}\n\n`);
             }
           },
         });
-        await handle.done;
+        const exitInfo = await handle.done;
+        const elapsedMs = Date.now() - t0;
+        process.stderr.write(
+          `[studio:msg] proj=${id} phase=${phaseInfo.phase} done in ${elapsedMs}ms exit=${exitInfo.exitCode} text=${assistantText.length}B chunks=${textChunks}\n`,
+        );
 
         // v0.8: try multi-frame path first — content-graph JSON + tagged html blocks.
         // Fall back to single-frame fast path (v0.7) when no graph is emitted.
