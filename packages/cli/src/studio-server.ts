@@ -769,6 +769,19 @@ function buildHtmlGenerationPrompt(args: BuildPromptArgs): string {
   }
   const answeringOptions = !!cardAssistant && !isFirstTurn;
 
+  // Detect "opener" — short greeting / vague intent. Empirically,
+  // `claude --print` returns an empty string when the prompt offers a binary
+  // draft-vs-ask choice and the user's message is too short to commit either
+  // way ("你好", "hi", "做个视频" …). Force-pick the ask path with a tight
+  // hv-options card schema so the model has exactly one job.
+  const trimmed = userText.trim();
+  const isOpener =
+    !answeringOptions &&
+    trimmed.length < 30 &&
+    !/brand|outro|intro|launch|demo|video|chart|data|product|tagline|视频|品牌|预告|发布|讲解|介绍|对比|时间线/i.test(
+      trimmed,
+    );
+
   // Heuristic: a "concrete" first turn (≥ 8 words OR mentions a brand/product/topic
   // word) gets the direct-draft path. A short / vague turn gets the explorer path.
   // When the user is answering options, treat the turn as concrete — they
@@ -779,6 +792,50 @@ function buildHtmlGenerationPrompt(args: BuildPromptArgs): string {
     /brand|outro|intro|launch|demo|video|chart|data|product|tagline/i.test(userText);
 
   const parts: string[] = [];
+
+  // Opener path: stripped-down prompt that ONLY asks the agent to emit a
+  // welcoming line + an hv-options card. No source HTML, no decision tree,
+  // no multi-frame schema — those would tempt claude --print into emitting
+  // nothing.
+  if (isOpener) {
+    const opener: string[] = [];
+    opener.push(
+      `The user just opened a project and said "${trimmed}". You are an HTML-video creation assistant.`,
+    );
+    opener.push('');
+    opener.push(
+      `Reply with TWO things, in this exact order:`,
+    );
+    opener.push(
+      `1. ONE friendly opening sentence in the user's language (≤ 25 chars), e.g. "你好！想做点什么？" or "Hi! What kind of video?".`,
+    );
+    opener.push(
+      `2. A fenced \`\`\`hv-options block with 4 content-type choices and allow_freeform: true. JSON shape:`,
+    );
+    opener.push('   ```hv-options');
+    opener.push('   {');
+    opener.push('     "question": "想做哪种内容？" or "What kind?",');
+    opener.push('     "options": [');
+    opener.push('       { "label": "单帧标题卡", "hint": "logo / 封面 / 单画面 - 5-10s" },');
+    opener.push('       { "label": "多帧预告片", "hint": "产品 / 活动 teaser, 3-6 帧" },');
+    opener.push('       { "label": "数据大字报", "hint": "1-2 个核心数字, 社媒爆款风" },');
+    opener.push('       { "label": "概念解说短片", "hint": "几帧讲清一个 idea / feature" }');
+    opener.push('     ],');
+    opener.push('     "allow_freeform": true');
+    opener.push('   }');
+    opener.push('   ```');
+    opener.push('');
+    if (tmpl) {
+      opener.push(
+        `Note: a template "${tmpl.name}" is currently selected (${tmpl.description}), but treat it as a visual style reference only. Don't let its name pin the user to one use case — they may want to repurpose the look for any of the 4 content types above.`,
+      );
+      opener.push('');
+    }
+    opener.push(
+      `Do NOT write HTML this turn. Do NOT return an empty reply. The hv-options block is REQUIRED.`,
+    );
+    return opener.join('\n');
+  }
 
   // When the user is answering an hv-options card, return a stripped-down
   // direct-draft prompt and skip the rest of the explorer/concrete branching.
