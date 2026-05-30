@@ -345,10 +345,43 @@ export async function startStudioServer(ctx: CliContext, port: number): Promise<
         return json(res, 200, { ok: true, target, platform });
       }
 
-      // Agents (detected on each call; cheap)
+      // Agents (detected on each call; cheap thanks to the in-process cache)
       if (url.pathname === '/api/agents' && m === 'GET') {
-        const agents = await detectAll();
+        const force = url.searchParams.get('force') === '1';
+        const agents = await detectAll(force ? { force: true } : undefined);
         return json(res, 200, { agents });
+      }
+
+      // Agent smoke test — fires a tiny prompt at the requested agent and
+      // reports timing + bytes. Used by the Settings modal so the user can
+      // confirm a CLI is actually responding (not just on PATH).
+      const testMatch = url.pathname.match(/^\/api\/agents\/([^/]+)\/test$/);
+      if (testMatch && testMatch[1] && m === 'POST') {
+        const agentId = testMatch[1];
+        const def = findAgent(agentId);
+        if (!def) return json(res, 404, { error: `agent "${agentId}" not registered` });
+        const prompt = 'Reply with one word: hello.';
+        const t0 = Date.now();
+        let out = '';
+        let err = '';
+        const handle = spawnAgent({
+          def,
+          prompt,
+          context: { cwd: process.cwd() },
+          onEvent: (ev) => {
+            if (ev.type === 'text') out += ev.chunk;
+            else if (ev.type === 'error') err = ev.message;
+          },
+        });
+        const exit = await handle.done;
+        return json(res, 200, {
+          ok: exit.exitCode === 0 && out.trim().length > 0,
+          exit_code: exit.exitCode,
+          ms: Date.now() - t0,
+          bytes: out.length,
+          stdout_head: out.slice(0, 200),
+          error: err || (out.trim().length === 0 ? 'empty reply' : undefined),
+        });
       }
 
       // Messages: GET history (lazy-loads from messages.json on first hit)

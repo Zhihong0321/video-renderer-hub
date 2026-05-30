@@ -61,13 +61,112 @@
     box-shadow: inset 0 -1px 0 rgba(0,0,0,.08), 0 4px 10px rgba(201, 100, 66, .18); }
   .toolbar .export-btn:hover:not(:disabled) { background: var(--accent-hover); }
   .toolbar .export-btn:disabled { opacity: .35; cursor: not-allowed; box-shadow: none; }
-  .toolbar .lang-switch select { background: var(--bg-panel);
-    border: 1px solid var(--border); color: var(--text-muted);
-    border-radius: var(--radius-sm); padding: 4px 8px; font-size: 11.5px;
-    font-family: var(--font-mono); cursor: pointer;
-    transition: border-color .15s, color .15s; }
-  .toolbar .lang-switch select:hover { border-color: var(--accent); color: var(--text); }
-  .toolbar .lang-switch select:focus { outline: none; border-color: var(--accent); }
+  /* Top-bar external links + settings gear */
+  .toolbar .toolbar-links { gap: 4px; margin-left: 4px; }
+  .toolbar .tb-link { display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 9px; border-radius: var(--radius-sm); color: var(--text-muted);
+    font-size: 11.5px; font-family: var(--font-mono); text-decoration: none;
+    transition: background .12s, color .12s; }
+  .toolbar .tb-link:hover { background: var(--bg-subtle); color: var(--text); }
+  .toolbar .tb-link svg { flex: 0 0 auto; }
+  .toolbar .tb-link-label { white-space: nowrap; }
+  @media (max-width: 1100px) {
+    .toolbar .tb-link-label { display: none; }
+  }
+  .toolbar .icon-btn-toolbar { background: transparent; border: 1px solid transparent;
+    color: var(--text-muted); cursor: pointer; padding: 6px;
+    border-radius: var(--radius-sm); display: inline-flex; align-items: center;
+    justify-content: center; transition: background .12s, color .12s, border-color .12s; }
+  .toolbar .icon-btn-toolbar:hover { background: var(--bg-subtle);
+    color: var(--text); border-color: var(--border); }
+
+  /* Settings modal */
+  .settings-modal .modal.settings { width: min(880px, 92vw); height: min(620px, 88vh);
+    padding: 0; display: flex; flex-direction: column; gap: 0; }
+  .settings-head { display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  .settings-head h2 { margin: 0; font-size: 15px; }
+  .settings-head .modal-close { background: transparent; border: 0; color: var(--text-muted);
+    font-size: 16px; cursor: pointer; padding: 4px 8px; border-radius: var(--radius-sm); }
+  .settings-head .modal-close:hover { color: var(--text); background: var(--bg-subtle); }
+  .settings-body { flex: 1; display: grid; grid-template-columns: 200px 1fr;
+    overflow: hidden; }
+  .settings-nav { padding: 12px 8px; border-right: 1px solid var(--border);
+    background: var(--bg-panel); display: flex; flex-direction: column; gap: 2px;
+    overflow-y: auto; }
+  .settings-nav-item { display: flex; align-items: center; gap: 10px;
+    background: transparent; border: 0; color: var(--text-muted);
+    padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer;
+    text-align: left; font-size: 12.5px; font-family: inherit;
+    transition: background .12s, color .12s; }
+  .settings-nav-item:hover { background: var(--bg-subtle); color: var(--text); }
+  .settings-nav-item.active { background: var(--accent-soft); color: var(--accent);
+    font-weight: 500; }
+  .settings-panel { padding: 22px 26px; overflow-y: auto; }
+
+  /* Settings: Agent panel */
+  .settings-panel h3 { margin: 0 0 4px; font-size: 16px; font-weight: 500; }
+  .settings-panel .panel-sub { color: var(--text-muted); font-size: 12.5px;
+    margin-bottom: 18px; }
+  .settings-mode-tabs { display: grid; grid-template-columns: 1fr 1fr;
+    background: var(--bg-subtle); border-radius: var(--radius-sm); padding: 3px;
+    gap: 3px; margin-bottom: 16px; }
+  .settings-mode-tabs button { background: transparent; border: 0; color: var(--text-muted);
+    padding: 7px 0; border-radius: calc(var(--radius-sm) - 2px); cursor: pointer;
+    font-size: 12.5px; font-family: inherit; transition: background .12s, color .12s; }
+  .settings-mode-tabs button.active { background: var(--bg-panel); color: var(--text);
+    box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .agent-card { display: grid; grid-template-columns: 36px 1fr auto;
+    gap: 12px; align-items: center; padding: 12px 14px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-panel); margin-bottom: 8px; transition: border-color .12s; }
+  .agent-card:hover { border-color: var(--accent); }
+  .agent-card.selected { border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft); }
+  .agent-card .agent-icon { width: 36px; height: 36px; border-radius: var(--radius-sm);
+    display: grid; place-items: center; background: var(--bg-subtle); font-size: 18px; }
+  .agent-card .agent-meta .agent-name { font-size: 13.5px; font-weight: 500; color: var(--text); }
+  .agent-card .agent-meta .agent-desc { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+  .agent-card .agent-meta .agent-version { font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono); margin-top: 4px; }
+  .agent-card .agent-actions { display: flex; gap: 6px; align-items: center; }
+  .agent-card .agent-actions button { background: var(--bg-subtle); color: var(--text-muted);
+    border: 1px solid var(--border); padding: 5px 10px; border-radius: var(--radius-sm);
+    cursor: pointer; font-size: 11.5px; transition: border-color .12s, color .12s; }
+  .agent-card .agent-actions button:hover { border-color: var(--accent); color: var(--text); }
+  .agent-card .agent-status-dot { display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; margin-right: 4px; }
+  .agent-card .agent-status-dot.ok { background: var(--green, #4ade80); }
+  .agent-card .agent-status-dot.missing { background: var(--text-faint); }
+  .settings-panel .agent-test-result { font-size: 11px; color: var(--text-muted);
+    font-family: var(--font-mono); margin-top: 6px; padding: 6px 10px;
+    background: var(--bg-subtle); border-radius: var(--radius-sm); }
+  .settings-panel .agent-test-result.ok { color: var(--green, #4ade80); }
+  .settings-panel .agent-test-result.error { color: rgb(220, 60, 60); }
+
+  /* Settings: Language panel */
+  .lang-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .lang-options button { background: var(--bg-panel); border: 1px solid var(--border);
+    color: var(--text); padding: 14px 16px; border-radius: var(--radius);
+    cursor: pointer; font-family: inherit; font-size: 13.5px;
+    text-align: left; transition: border-color .12s; }
+  .lang-options button:hover { border-color: var(--accent); }
+  .lang-options button.active { border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft); }
+  .lang-options button .lang-name { font-weight: 500; margin-bottom: 4px; }
+  .lang-options button .lang-sub { font-size: 11.5px; color: var(--text-muted);
+    font-family: var(--font-mono); }
+
+  /* Settings: About */
+  .about-block { display: flex; flex-direction: column; gap: 10px; }
+  .about-block .about-line { display: grid;
+    grid-template-columns: 100px 1fr; align-items: baseline; gap: 12px;
+    padding: 8px 0; border-bottom: 1px dashed var(--border); }
+  .about-block .about-line .k { font-size: 11.5px; color: var(--text-muted);
+    font-family: var(--font-mono); }
+  .about-block .about-line .v { font-size: 12.5px; color: var(--text); }
+  .about-block .about-line .v a { color: var(--accent); text-decoration: none; }
+  .about-block .about-line .v a:hover { text-decoration: underline; }
 
   /* ===== Body: 4 columns ===== */
   /* sidebar / CHAT / PREVIEW (centre, biggest) / text-fields (right, collapsible) */
@@ -653,6 +752,22 @@
         <div class="v">studio · v0.7</div>
       </div>
     </div>
+
+    <div class="toolbar-section toolbar-links">
+      <a class="tb-link" href="https://github.com/nexu-io/html-video" target="_blank" rel="noopener" title="html-video on GitHub" aria-label="html-video repo">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.63 22.42c.57.1.78-.25.78-.55v-2.13c-3.18.69-3.85-1.36-3.85-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.76 2.69 1.25 3.34.96.1-.74.4-1.25.72-1.54-2.54-.29-5.21-1.27-5.21-5.66 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.04 0 0 .96-.31 3.15 1.17a10.92 10.92 0 0 1 5.74 0c2.18-1.48 3.15-1.17 3.15-1.17.62 1.58.23 2.75.11 3.04.74.8 1.18 1.82 1.18 3.07 0 4.4-2.68 5.36-5.23 5.65.41.36.78 1.06.78 2.13v3.16c0 .31.21.66.79.55A11.5 11.5 0 0 0 12 .5z"/></svg>
+        <span class="tb-link-label">html-video</span>
+      </a>
+      <a class="tb-link" href="https://github.com/nexu-io/open-design" target="_blank" rel="noopener" title="Open Design on GitHub" aria-label="Open Design repo">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.63 22.42c.57.1.78-.25.78-.55v-2.13c-3.18.69-3.85-1.36-3.85-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.76 2.69 1.25 3.34.96.1-.74.4-1.25.72-1.54-2.54-.29-5.21-1.27-5.21-5.66 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.04 0 0 .96-.31 3.15 1.17a10.92 10.92 0 0 1 5.74 0c2.18-1.48 3.15-1.17 3.15-1.17.62 1.58.23 2.75.11 3.04.74.8 1.18 1.82 1.18 3.07 0 4.4-2.68 5.36-5.23 5.65.41.36.78 1.06.78 2.13v3.16c0 .31.21.66.79.55A11.5 11.5 0 0 0 12 .5z"/></svg>
+        <span class="tb-link-label">Open Design</span>
+      </a>
+      <a class="tb-link" href="https://discord.com/invite/keeVPMrueT" target="_blank" rel="noopener" title="Discord" aria-label="Discord">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.74 19.74 0 0 0 3.683 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.094.252-.192.372-.291a.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.009c.12.099.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.04.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.84 19.84 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.42 0-1.333.956-2.42 2.157-2.42 1.21 0 2.176 1.097 2.157 2.42 0 1.335-.956 2.42-2.157 2.42zm7.974 0c-1.183 0-2.157-1.085-2.157-2.42 0-1.333.955-2.42 2.157-2.42 1.21 0 2.176 1.097 2.157 2.42 0 1.335-.946 2.42-2.157 2.42z"/></svg>
+        <span class="tb-link-label">Discord</span>
+      </a>
+    </div>
+
     <input class="name-input" id="proj-name" data-i18n-attr="placeholder:app.no_project" disabled />
 
     <div class="toolbar-section">
@@ -662,22 +777,11 @@
       </button>
     </div>
 
-    <div class="toolbar-section">
-      <span class="sec-label" data-i18n="toolbar.agent">Agent</span>
-      <select id="agent-select" disabled>
-        <option value="" data-i18n="toolbar.agent_none">— none —</option>
-      </select>
-      <span class="agent-status missing" id="agent-status">○</span>
-    </div>
-
     <div class="grow"></div>
 
-    <div class="toolbar-section lang-switch">
-      <select id="lang-select" title="Language" aria-label="Language">
-        <option value="en">EN</option>
-        <option value="zh">中文</option>
-      </select>
-    </div>
+    <button class="icon-btn-toolbar" id="btn-settings" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
 
     <button class="export-btn" id="btn-export" disabled data-i18n="toolbar.export_mp4">Export MP4</button>
   </header>
@@ -722,6 +826,32 @@
       <button class="modal-close" id="gallery-close" data-i18n="gallery.close">Close</button>
     </div>
     <div class="gallery" id="gallery"></div>
+  </div>
+</div>
+
+<div class="modal-bg settings-modal" id="settings-modal">
+  <div class="modal settings">
+    <div class="settings-head">
+      <h2 data-i18n="settings.title">Settings</h2>
+      <button class="modal-close" id="settings-close" aria-label="Close">✕</button>
+    </div>
+    <div class="settings-body">
+      <nav class="settings-nav">
+        <button class="settings-nav-item active" data-settings-tab="agent">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V12M4 6V3M12 21v-9M12 8V3M20 21v-5M20 12V3M2 12h4M10 8h4M18 16h4"/></svg>
+          <span data-i18n="settings.tab.agent">Agent</span>
+        </button>
+        <button class="settings-nav-item" data-settings-tab="language">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8h12M9 4v4M14 13l-4 7M14 13l4 7M11 17h6"/></svg>
+          <span data-i18n="settings.tab.language">Language</span>
+        </button>
+        <button class="settings-nav-item" data-settings-tab="about">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v4h1"/></svg>
+          <span data-i18n="settings.tab.about">About</span>
+        </button>
+      </nav>
+      <div class="settings-panel" id="settings-panel"></div>
+    </div>
   </div>
 </div>
 

@@ -25,6 +25,8 @@ const API = {
   getMessages: id => fetch(`/api/projects/${id}/messages`).then(r => r.json()),
   rawHtml: id => fetch(`/api/projects/${id}/raw-html`).then(r => r.ok ? r.text() : null),
   putRawHtml: (id, html) => fetch(`/api/projects/${id}/raw-html`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ html }) }).then(r => r.json()),
+  testAgent: id => fetch(`/api/agents/${encodeURIComponent(id)}/test`, { method: 'POST' }).then(r => r.json()),
+  rescanAgents: () => fetch('/api/agents?force=1').then(r => r.json()),
 };
 
 const state = {
@@ -354,41 +356,20 @@ function renderToolbar() {
   const p = state.selected;
   const nameInput = document.getElementById('proj-name');
   const pickBtn = document.getElementById('btn-pick-template');
-  const agentSel = document.getElementById('agent-select');
-  const agentStatus = document.getElementById('agent-status');
   const exportBtn = document.getElementById('btn-export');
 
   nameInput.disabled = !p;
-  nameInput.placeholder = p ? '' : '(no project)';
+  nameInput.placeholder = p ? '' : t('app.no_project');
   nameInput.value = p?.name ?? '';
 
   pickBtn.disabled = !p;
   if (p && p.templateId) {
-    const t = state.templates.find(x => x.id === p.templateId);
+    const tpl = state.templates.find(x => x.id === p.templateId);
     pickBtn.classList.remove('empty');
-    pickBtn.querySelector('.label').textContent = t ? t.name : p.templateId;
+    pickBtn.querySelector('.label').textContent = tpl ? tpl.name : p.templateId;
   } else {
     pickBtn.classList.add('empty');
-    // Template is optional — label hints at quick-start, not required step
     pickBtn.querySelector('.label').textContent = t('toolbar.template_pick');
-  }
-
-  const availableAgents = state.agents.filter(a => a.available);
-  agentSel.disabled = !p || availableAgents.length === 0;
-  agentSel.innerHTML = availableAgents.length === 0
-    ? '<option value="">— none detected —</option>'
-    : availableAgents.map(a => {
-        const sel = (p && p.agentId === a.id) || (p && !p.agentId && a.id === availableAgents[0].id);
-        const ver = a.version ? ` · ${esc(a.version.split(' ')[0])}` : '';
-        return `<option value="${a.id}" ${sel ? 'selected' : ''}>${esc(a.name)}${ver}</option>`;
-      }).join('');
-
-  if (availableAgents.length > 0) {
-    agentStatus.className = 'agent-status connected';
-    agentStatus.textContent = t('toolbar.agent_ready');
-  } else {
-    agentStatus.className = 'agent-status missing';
-    agentStatus.textContent = t('toolbar.agent_install');
   }
 
   // Frames-mode projects don't need a template to export — they have
@@ -414,11 +395,8 @@ function renderToolbar() {
 // reuse / re-render can't strand stale event handlers. (Joey reported
 // template + agent picks not responding in v0.6.2.)
 function wireToolbar() {
-  const langSel = document.getElementById('lang-select');
-  if (langSel) {
-    langSel.value = getLocale();
-    langSel.onchange = (e) => setLocale(e.target.value);
-  }
+  const settingsBtn = document.getElementById('btn-settings');
+  if (settingsBtn) settingsBtn.onclick = openSettingsModal;
   const pickBtn = document.getElementById('btn-pick-template');
   if (pickBtn) {
     pickBtn.onclick = (e) => {
@@ -430,15 +408,8 @@ function wireToolbar() {
       openGallery();
     };
   }
-  const agentSel = document.getElementById('agent-select');
-  if (agentSel) {
-    agentSel.onchange = async (e) => {
-      if (!state.selected) return;
-      await API.setAgent(state.selected.id, e.target.value || null);
-      state.selected = (await API.getProject(state.selected.id)).project;
-      renderToolbar();
-    };
-  }
+  // Agent selection moved to Settings modal (Agent panel). No more inline
+  // agent dropdown in the toolbar.
   const exportBtn = document.getElementById('btn-export');
   if (exportBtn) {
     exportBtn.onclick = () => {
@@ -1943,12 +1914,233 @@ function wireModals() {
   document.getElementById('gallery-modal').addEventListener('click', e => {
     if (e.target.id === 'gallery-modal') closeGallery();
   });
+  // Settings
+  const settingsModal = document.getElementById('settings-modal');
+  if (settingsModal) {
+    document.getElementById('settings-close').onclick = closeSettingsModal;
+    settingsModal.addEventListener('click', (e) => {
+      if (e.target.id === 'settings-modal') closeSettingsModal();
+    });
+    settingsModal.querySelectorAll('.settings-nav-item').forEach((btn) => {
+      btn.onclick = () => {
+        settingsModal.querySelectorAll('.settings-nav-item').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        renderSettingsPanel(btn.dataset.settingsTab);
+      };
+    });
+  }
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
       closeNewModal();
       closeGallery();
+      closeSettingsModal();
     }
   });
+}
+
+// ============== Settings modal ==============
+const AGENT_ICONS = {
+  'anthropic-api': '☁️',
+  'claude': '🟧',
+  'cursor-agent': '🟦',
+  'hermes': '🌀',
+  'gemini': '🟦',
+  'grok': '🟪',
+};
+const AGENT_DESC = {
+  'anthropic-api': 'Direct Messages API · streams reliably',
+  'claude': 'Claude Code (claude --print)',
+  'cursor-agent': 'Cursor command line',
+  'hermes': 'Hermes ACP CLI',
+};
+
+function openSettingsModal(tab = 'agent') {
+  const modal = document.getElementById('settings-modal');
+  if (!modal) return;
+  modal.classList.add('show');
+  modal.querySelectorAll('.settings-nav-item').forEach((b) => {
+    b.classList.toggle('active', b.dataset.settingsTab === tab);
+  });
+  renderSettingsPanel(tab);
+}
+function closeSettingsModal() {
+  const modal = document.getElementById('settings-modal');
+  if (modal) modal.classList.remove('show');
+}
+
+function renderSettingsPanel(tab) {
+  const panel = document.getElementById('settings-panel');
+  if (!panel) return;
+  if (tab === 'language') return renderSettingsLanguage(panel);
+  if (tab === 'about') return renderSettingsAbout(panel);
+  return renderSettingsAgent(panel);
+}
+
+function renderSettingsAgent(panel) {
+  // Default to local CLI mode; BYOK = anthropic-api which is itself an HTTP agent
+  const mode = panel.dataset.mode || 'local';
+  const agents = state.agents ?? [];
+  const localAgents = agents.filter((a) => a.id !== 'anthropic-api');
+  const httpAgents = agents.filter((a) => a.id === 'anthropic-api');
+  const list = mode === 'byok' ? httpAgents : localAgents;
+  const currentId = state.selected?.agentId
+    || (agents.find((a) => a.available)?.id ?? 'anthropic-api');
+
+  panel.innerHTML = `
+    <h3>${esc(t('settings.agent.title'))}</h3>
+    <div class="panel-sub">${esc(t('settings.agent.subtitle'))}</div>
+
+    <div class="settings-mode-tabs">
+      <button data-mode="local" class="${mode === 'local' ? 'active' : ''}">${esc(t('settings.agent.mode.local'))}</button>
+      <button data-mode="byok" class="${mode === 'byok' ? 'active' : ''}">${esc(t('settings.agent.mode.byok'))}</button>
+    </div>
+
+    ${mode === 'byok' ? `
+      <div class="panel-sub" style="margin-bottom:14px">
+        ${esc(t('settings.agent.byok.intro'))}
+        <ul style="margin:6px 0 0 18px;padding:0;font-family:var(--font-mono);font-size:11.5px">
+          <li>${esc(t('settings.agent.byok.env_key'))}</li>
+          <li>${esc(t('settings.agent.byok.env_base'))}</li>
+        </ul>
+      </div>
+    ` : ''}
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono);letter-spacing:.08em;text-transform:uppercase">
+        ${esc(t('settings.agent.detected', { count: list.length }))}
+      </div>
+      <button class="btn-rescan" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:5px 10px;border-radius:var(--radius-sm);cursor:pointer;font-size:11px;font-family:var(--font-mono)">
+        ${esc(t('settings.agent.rescan'))}
+      </button>
+    </div>
+
+    <div class="agent-list">
+      ${list.map((a) => {
+        const isCurrent = a.id === currentId && a.available;
+        const desc = AGENT_DESC[a.id] || (a.bin ?? '');
+        const ver = a.version ? esc(a.version) : (a.available ? '' : esc(t('settings.agent.unavailable')));
+        const icon = AGENT_ICONS[a.id] || '⚙️';
+        return `<div class="agent-card ${isCurrent ? 'selected' : ''}" data-agent-id="${esc(a.id)}">
+          <div class="agent-icon">${icon}</div>
+          <div class="agent-meta">
+            <div class="agent-name">
+              <span class="agent-status-dot ${a.available ? 'ok' : 'missing'}"></span>${esc(a.name)}
+            </div>
+            <div class="agent-desc">${esc(desc)}</div>
+            ${ver ? `<div class="agent-version">${ver}</div>` : ''}
+          </div>
+          <div class="agent-actions">
+            ${a.available ? `<button data-act="test">${esc(t('settings.agent.test'))}</button>` : ''}
+            ${a.available
+              ? (isCurrent
+                  ? `<span style="font-size:11px;color:var(--accent);font-family:var(--font-mono)">${esc(t('settings.agent.in_use'))}</span>`
+                  : `<button data-act="use" class="primary-action" style="background:var(--accent);border-color:var(--accent);color:var(--accent-fg)">${esc(t('settings.agent.use'))}</button>`)
+              : (a.installUrl ? `<a href="${a.installUrl}" target="_blank" rel="noopener" style="font-size:11px;color:var(--text-faint)">install ↗</a>` : '')}
+          </div>
+          <div class="agent-test-result" data-test-result="${esc(a.id)}" style="display:none;grid-column:1 / -1"></div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  panel.querySelectorAll('.settings-mode-tabs button').forEach((btn) => {
+    btn.onclick = () => {
+      panel.dataset.mode = btn.dataset.mode;
+      renderSettingsAgent(panel);
+    };
+  });
+  panel.querySelectorAll('.btn-rescan').forEach((btn) => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = '…';
+      try {
+        const r = await API.rescanAgents();
+        state.agents = r.agents ?? state.agents;
+        renderSettingsAgent(panel);
+        toast(t('settings.agent.rescanned'), 'success');
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  });
+  panel.querySelectorAll('.agent-card [data-act]').forEach((btn) => {
+    btn.onclick = async () => {
+      const card = btn.closest('.agent-card');
+      const aid = card.dataset.agentId;
+      const act = btn.dataset.act;
+      if (act === 'use') {
+        if (!state.selected) {
+          toast(t('composer.placeholder.no_project'), 'error');
+          return;
+        }
+        await API.setAgent(state.selected.id, aid);
+        state.selected = (await API.getProject(state.selected.id)).project;
+        renderSettingsAgent(panel);
+        toast(`✓ ${aid}`, 'success');
+      } else if (act === 'test') {
+        const result = panel.querySelector(`[data-test-result="${aid}"]`);
+        result.style.display = 'block';
+        result.className = 'agent-test-result';
+        result.textContent = t('settings.agent.testing');
+        btn.disabled = true;
+        try {
+          const r = await API.testAgent(aid);
+          if (r.ok) {
+            result.classList.add('ok');
+            result.textContent = t('settings.agent.test_ok', { ms: r.ms, bytes: r.bytes })
+              + (r.stdout_head ? ` — ${r.stdout_head.slice(0, 60).replace(/\n/g, ' ')}` : '');
+          } else {
+            result.classList.add('error');
+            result.textContent = t('settings.agent.test_fail', { message: r.error || `exit ${r.exit_code}` });
+          }
+        } catch (e) {
+          result.classList.add('error');
+          result.textContent = t('settings.agent.test_fail', { message: e?.message ?? String(e) });
+        } finally {
+          btn.disabled = false;
+        }
+      }
+    };
+  });
+}
+
+function renderSettingsLanguage(panel) {
+  const cur = getLocale();
+  panel.innerHTML = `
+    <h3>${esc(t('settings.language.title'))}</h3>
+    <div class="panel-sub">${esc(t('settings.language.subtitle'))}</div>
+    <div class="lang-options">
+      <button data-lang="en" class="${cur === 'en' ? 'active' : ''}">
+        <div class="lang-name">${esc(t('settings.language.en'))}</div>
+        <div class="lang-sub">${esc(t('settings.language.en_sub'))}</div>
+      </button>
+      <button data-lang="zh" class="${cur === 'zh' ? 'active' : ''}">
+        <div class="lang-name">${esc(t('settings.language.zh'))}</div>
+        <div class="lang-sub">${esc(t('settings.language.zh_sub'))}</div>
+      </button>
+    </div>
+  `;
+  panel.querySelectorAll('[data-lang]').forEach((btn) => {
+    btn.onclick = () => {
+      setLocale(btn.dataset.lang);
+      // re-render this panel itself with the new locale
+      renderSettingsLanguage(panel);
+    };
+  });
+}
+
+function renderSettingsAbout(panel) {
+  panel.innerHTML = `
+    <h3>${esc(t('settings.about.title'))}</h3>
+    <div class="panel-sub">${esc(t('settings.about.subtitle'))}</div>
+    <div class="about-block">
+      <div class="about-line"><span class="k">${esc(t('settings.about.version'))}</span><span class="v">studio · v0.7</span></div>
+      <div class="about-line"><span class="k">${esc(t('settings.about.repo'))}</span><span class="v"><a href="https://github.com/nexu-io/html-video" target="_blank" rel="noopener">github.com/nexu-io/html-video</a></span></div>
+      <div class="about-line"><span class="k">${esc(t('settings.about.discord'))}</span><span class="v"><a href="https://discord.com/invite/keeVPMrueT" target="_blank" rel="noopener">discord.com/invite/keeVPMrueT</a></span></div>
+      <div class="about-line"><span class="k">${esc(t('settings.about.license'))}</span><span class="v">Apache-2.0</span></div>
+      <div class="about-line"><span class="k">${esc(t('settings.about.related'))}</span><span class="v"><a href="https://github.com/nexu-io/open-design" target="_blank" rel="noopener">Open Design</a></span></div>
+    </div>
+  `;
 }
 
 // ============== utils ==============
