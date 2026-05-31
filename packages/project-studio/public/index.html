@@ -728,10 +728,14 @@
     width: 1920px; height: 1080px; border: 0;
     transform: scale(var(--gallery-scale, 0.135));
     transform-origin: top left; pointer-events: none; }
-  /* Portrait templates (vignelli / 9:16): 177.78% = 16/9 inverted. */
-  .gallery-card .preview.portrait { padding-top: 177.78%; width: 60%; margin: 0 auto; }
+  /* Portrait templates (vignelli / 9:16) keep the SAME 16:9 card box as
+     everything else so the grid rows stay uniform — the tall 1080×1920
+     source is scaled to fit the box height and centred, letterboxed left
+     and right rather than stretching the whole card. */
   .gallery-card .preview.portrait iframe { width: 1080px; height: 1920px;
-    transform: scale(var(--gallery-scale, 0.24)); }
+    left: 50%;
+    transform: translateX(-50%) scale(var(--gallery-scale, 0.08));
+    transform-origin: top center; }
   /* Poster-mode cards: the shipped SVG fills the 16:9 box directly. */
   .gallery-card .preview img.poster { position: absolute; inset: 0;
     width: 100%; height: 100%; object-fit: cover; display: block; }

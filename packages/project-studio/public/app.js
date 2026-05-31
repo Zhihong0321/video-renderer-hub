@@ -1912,8 +1912,11 @@ function applyGalleryScales(grid) {
     const w = p.clientWidth;
     if (!w) return;
     const portrait = p.dataset.portrait === 'true';
-    const baseW = portrait ? 1080 : 1920;
-    p.style.setProperty('--gallery-scale', (w / baseW).toFixed(4));
+    // Landscape fills the 16:9 box by width. Portrait keeps the same 16:9
+    // box but is scaled to fit the box HEIGHT (1080×1920 → fit by height,
+    // centred), so its card stays the same height as the rest of the grid.
+    const scale = portrait ? p.clientHeight / 1920 : w / 1920;
+    p.style.setProperty('--gallery-scale', scale.toFixed(4));
   });
 }
 
