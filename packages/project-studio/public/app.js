@@ -452,18 +452,22 @@ function renderAgentMenu() {
     // unlike a genuinely missing CLI. Offer a login button instead of just
     // greying it out + the misleading "Not installed".
     const needsLogin = !a.available && a.id === 'amr' && !!a.hint;
-    let tag = '';
-    if (a.available) tag = '';
-    else if (needsLogin) tag = `<span class="mi-login" role="button" tabindex="0" data-login-agent="${esc(a.id)}">${esc(t('agent.sign_in'))}</span>`;
-    else tag = `<span class="mi-tag">${esc(t('settings.agent.unavailable'))}</span>`;
-    // NOTE: do NOT use the native `disabled` attribute — a disabled <button>
-    // swallows pointer events on its children, so the inner "Sign in" span
-    // becomes unclickable. Mark unselectable via a class and gate in JS instead.
+    const inner = `<span class="mi-dot ${a.available ? 'ok' : ''}"></span>
+      <span class="mi-logo">${logo}</span>
+      <span class="mi-name">${esc(a.name)}</span>`;
+    // AMR-needs-login: render the row as a DIV (not a button) so a real, separate
+    // Sign-in <button> can live beside it — nesting a button inside a button is
+    // invalid HTML and the outer one eats the inner one's clicks.
+    if (needsLogin) {
+      return `<div class="agent-menu-item is-unselectable" title="${esc(a.hint ?? '')}">
+        ${inner}
+        <button type="button" class="mi-login" data-login-agent="${esc(a.id)}">${esc(t('agent.sign_in'))}</button>
+      </div>`;
+    }
+    const tag = a.available ? '' : `<span class="mi-tag">${esc(t('settings.agent.unavailable'))}</span>`;
     const unsel = a.available ? '' : ' is-unselectable';
     return `<button type="button" class="agent-menu-item${cur}${unsel}" data-agent-id="${esc(a.id)}" data-selectable="${a.available ? '1' : '0'}" title="${esc(a.hint ?? '')}">
-      <span class="mi-dot ${a.available ? 'ok' : ''}"></span>
-      <span class="mi-logo">${logo}</span>
-      <span class="mi-name">${esc(a.name)}</span>${tag}
+      ${inner}${tag}
     </button>`;
   }).join('');
   menu.querySelectorAll('.agent-menu-item').forEach((item) => {
