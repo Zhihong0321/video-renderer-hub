@@ -2632,6 +2632,18 @@ function buildHtmlGenerationPrompt(args: BuildPromptArgs): string {
                 default: defaults.frame_count,
                 options: ['2', '3', '4', '5', '6', '7', '8', '9', '10'].map((v) => ({ value: v, label: v })),
               },
+              // Opt-in: render data frames natively with Remotion (numbers roll,
+              // bars grow) instead of static hyperframes HTML. Default OFF —
+              // Remotion is a user-chosen enhancement, the AI never flips it.
+              {
+                key: 'remotion_enhance', label: '⚡ 数据帧动效', kind: 'buttons', required: false,
+                default: '关',
+                hint: '数据帧用原生 Remotion 渲染（数字滚动 / 柱子生长）；其余帧仍走 Hyperframes',
+                options: [
+                  { value: '关', label: '关' },
+                  { value: '开', label: '开 · Remotion' },
+                ],
+              },
             ]
           : [
               {
@@ -3099,6 +3111,10 @@ async function runSplitMultiFrameGenerate(
   }
   const aspect = ((collected.aspect ?? '16:9').split(/\s+/)[0] ?? '16:9');
   const frameCountReq = Math.max(2, Math.min(10, Number(collected.frame_count ?? '4') || 4));
+  // Opt-in (format card): render data frames natively with Remotion. When on,
+  // the planner must give every data node structured items, and after each
+  // data frame's HTML is written we enhance it in place (best-effort).
+  const enhanceData = (collected.remotion_enhance ?? '').startsWith('开');
   // Prefer per-frame pacing (total = per_frame × frames) — set by the format
   // card so a short total ÷ many frames can't produce a rushed clip. Fall back
   // to total ÷ frames for older projects that only stored `duration`.
@@ -3186,12 +3202,28 @@ async function runSplitMultiFrameGenerate(
     schemaVersion: 1,
     intent: 'explainer',
     synopsis: '<one-line description of the video>',
-    nodes: Array.from({ length: frameCountReq }, (_, i) => ({
-      id: `frame_${i + 1}`,
-      kind: i === 0 ? 'text' : i === frameCountReq - 1 ? 'entity' : 'data',
-      durationSec: perFrameDurationSec,
-      text: '<headline / subtitle for this frame>',
-    })),
+    nodes: Array.from({ length: frameCountReq }, (_, i) => {
+      const kind = i === 0 ? 'text' : i === frameCountReq - 1 ? 'entity' : 'data';
+      const node: Record<string, unknown> = {
+        id: `frame_${i + 1}`,
+        kind,
+        durationSec: perFrameDurationSec,
+        text: '<headline / subtitle for this frame>',
+      };
+      // When native Remotion enhancement is on, show data nodes carrying the
+      // structured items the rollup template animates (numbers roll, bars grow).
+      if (enhanceData && kind === 'data') {
+        node.data = {
+          title: '<short chart title>',
+          unit: '<optional unit, e.g. K / % / ★>',
+          items: [
+            { label: '<label>', value: 0 },
+            { label: '<label>', value: 0 },
+          ],
+        };
+      }
+      return node;
+    }),
     edges: Array.from({ length: frameCountReq - 1 }, (_, i) => ({
       from: `frame_${i + 1}`,
       to: `frame_${i + 2}`,
@@ -3201,6 +3233,9 @@ async function runSplitMultiFrameGenerate(
   graphPromptParts.push('```');
   graphPromptParts.push('');
   graphPromptParts.push(`Replace the placeholder text in each node with concrete content from the inputs. Adjust intent to match (single-frame|explainer|data-viz|promo|comparison|other). Keep node ids unique. Do NOT return an empty reply. Do NOT emit any HTML this turn.`);
+  if (enhanceData) {
+    graphPromptParts.push(`NATIVE DATA FRAMES (REQUIRED this run): every \`kind:"data"\` node MUST carry a \`data\` object \`{ title?, unit?, items: [{ label, value }] }\` with at least 2 items and numeric \`value\`s drawn from the inputs/source. These numbers will be animated (rolling counters, growing bars), so they must be real figures, not placeholders. The node's \`text\` still holds the headline. If a frame genuinely has no quantitative data, make it a \`text\` node instead of \`data\`.`);
+  }
   graphPromptParts.push(`STRICT JSON: the block must be valid JSON. Inside string values do NOT use straight double-quotes ("…") — if you need to quote a term or title, use 「」 or 《》 or single quotes. No trailing commas. No comments.`);
 
   const graphPrompt = graphPromptParts.join('\n');
@@ -3319,6 +3354,22 @@ h1{font-size:8vw;letter-spacing:-.03em;animation:in 1s ease forwards;opacity:0;t
       throw new Error(`frame "${nodeId}" generation returned empty (${frameText.length}B)`);
     }
     await ctx.orchestrator.writeFrameHtml(projectId, nodeId, extracted);
+    // Native Remotion enhancement (opt-in via format card). The frame now has a
+    // FrameRecord, so enhanceFrameNative can set engine/nativeTemplateId/data in
+    // place. Best-effort: if the data node lacks usable {label,value} items it
+    // throws — we keep the hyperframes HTML and warn rather than fail the run.
+    // 'frame-data-rollup' is the only native template today (TODO: picker).
+    if (enhanceData && node.kind === 'data') {
+      try {
+        await ctx.orchestrator.enhanceFrameNative(projectId, nodeId, 'frame-data-rollup');
+        onProgress(`  ⚡ 第 ${i + 1} 帧设为 Remotion 原生 (数字滚动 / 柱子生长)`);
+        onSse({ type: 'frame_enhanced', node_id: nodeId, order: i });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`[studio:split-generate] proj=${projectId} frame=${nodeId} enhance skipped: ${msg}\n`);
+        onProgress(`  ⚠️ 第 ${i + 1} 帧无法用 Remotion 增强（回落静态 HTML）：${msg}`);
+      }
+    }
     onProgress(`  ✓ 第 ${i + 1}/${graph.nodes.length} 帧完成 (${nodeId})`);
     onSse({ type: 'frame_done', node_id: nodeId, order: i, total: graph.nodes.length });
   }
