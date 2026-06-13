@@ -58,6 +58,14 @@ tmp/
 # This dir is created by the CLI / studio at runtime and is per-developer.
 .html-video/
 
+# Local runtime state (queue SQLite, result files, scratch workdirs)
+data/
+packages/cli/data/
+*.sqlite
+*.sqlite-*
+*.sqlite-wal
+*.sqlite-shm
+
 # Generated video output (large binaries)
 *.mp4
 *.webm

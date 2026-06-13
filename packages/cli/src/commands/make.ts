@@ -1,0 +1,484 @@
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import {
+  copyFile,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { fail, ok, progress } from '../output.js';
+
+interface MakeOptions {
+  output: string;
+}
+
+interface ManifestSection {
+  id: string;
+  html: string;
+  narration?: string;
+  durationSec?: number;
+}
+
+interface ManifestFile {
+  output: string;
+  fps: number;
+  resolution: { width: number; height: number };
+  voice: string;
+  language: string;
+  speechSpeed: number;
+  leadInSec: number;
+  tailSec: number;
+  minSlideSec: number;
+  sections: ManifestSection[];
+}
+
+interface SlideDeclaration {
+  id: string;
+  narrated: boolean;
+}
+
+interface SlidesFile {
+  slides: SlideDeclaration[];
+}
+
+interface VerificationResult {
+  durationSec: number;
+  expectedDurationSec: number;
+  sampledFrames: Array<{ timeSec: number; ymin: number; ymax: number }>;
+  streams: string[];
+  tts: Array<{ id: string; bytes: number; durationSec: number }>;
+}
+
+export async function makeVideo(projectRoot: string, promptText: string, opts: MakeOptions): Promise<void> {
+  const outputPath = resolve(opts.output);
+  const skillPath = join(projectRoot, 'workflows', 'speech-video.md');
+  const skillText = await readFile(skillPath, 'utf8').catch((err) => {
+    fail('missing-skill', `Cannot read ${skillPath}`, {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+
+  if (!promptText.trim()) {
+    fail('invalid-input', 'Prompt is required');
+  }
+
+  await mkdir(dirname(outputPath), { recursive: true });
+
+  let lastError = 'unknown failure';
+  let lastWorkDir = '';
+  const scratchRoot = join(projectRoot, 'out', 'hv-make-runs');
+  await mkdir(scratchRoot, { recursive: true });
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const workDir = await mkdtemp(join(scratchRoot, 'run-'));
+    lastWorkDir = workDir;
+    let keepWorkDir = true;
+
+    try {
+      progress('scratch', 5, { attempt, work_dir: workDir });
+      await prepareScratchDir(workDir);
+
+      progress('author', 15, { attempt });
+      await authorSlides({
+        workDir,
+        promptText,
+        skillText,
+        language: detectLanguage(promptText),
+      });
+      const slidesFile = await readSlidesFile(workDir);
+      await assertAuthoredFiles(workDir, slidesFile);
+
+      progress('manifest', 30, { attempt });
+      const manifest = await writeManifest(workDir, promptText, slidesFile);
+
+      progress('render', 55, { attempt });
+      await runDriver(projectRoot, join(workDir, 'manifest.json'));
+
+      progress('verify', 85, { attempt });
+      const verification = await verifyOutput(workDir, manifest);
+
+      await copyFile(join(workDir, 'final.mp4'), outputPath);
+      keepWorkDir = false;
+      ok({
+        output: outputPath,
+        attempt,
+        verification,
+      });
+      await rm(workDir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      progress('retry', attempt === 1 ? 90 : 100, {
+        attempt,
+        error: lastError,
+        work_dir: workDir,
+      });
+      if (!keepWorkDir) {
+        await rm(workDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  }
+
+  fail('hv-make-failed', lastError, { work_dir: lastWorkDir });
+}
+
+async function prepareScratchDir(workDir: string): Promise<void> {
+  await mkdir(join(workDir, 'slides'), { recursive: true });
+  await mkdir(join(workDir, 'narration'), { recursive: true });
+}
+
+async function authorSlides(args: {
+  workDir: string;
+  promptText: string;
+  skillText: string;
+  language: string;
+}): Promise<void> {
+  const prompt = buildClaudePrompt(args.promptText, args.skillText, args.language);
+  await run('claude', [
+    '--bare',
+    '--dangerously-skip-permissions',
+    '--permission-mode',
+    'bypassPermissions',
+    '-p',
+    prompt,
+  ], { cwd: args.workDir });
+}
+
+function buildClaudePrompt(promptText: string, skillText: string, language: string): string {
+  return [
+    'You are writing only creative content for a narrated video.',
+    'Read and follow these authoring rules exactly:',
+    skillText,
+    'Task:',
+    promptText,
+    `Language: ${language}`,
+    'Decide how many slides the topic needs.',
+    'Write a file named slides.json in the current working directory with exact JSON shape:',
+    '{"slides":[{"id":"cover","narrated":false},{"id":"s1","narrated":true},{"id":"outro","narrated":false}]}',
+    'Then create slides/<id>.html for every slide listed.',
+    'For every slide with narrated:true, create narration/<id>.txt.',
+    'Requirements:',
+    '- Use between 2 and 8 slides total.',
+    '- Usually include a silent cover and a silent outro when that helps clarity.',
+    '- One idea per slide.',
+    '- Make the visuals obviously non-blank and strongly visible.',
+    '- Use dark or high-contrast backgrounds rather than flat white.',
+    '- Narration should be concise, natural, and easy to speak.',
+    '- Do not create manifest.json.',
+    '- Do not create files outside slides.json, slides/*.html, and narration/*.txt.',
+    '- When finished, print a one-line summary only.',
+  ].join('\n\n');
+}
+
+async function readSlidesFile(workDir: string): Promise<SlidesFile> {
+  const slidesJsonPath = join(workDir, 'slides.json');
+  if (!existsSync(slidesJsonPath)) {
+    throw new Error('Claude did not create slides.json');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(slidesJsonPath, 'utf8'));
+  } catch {
+    throw new Error('slides.json is not valid JSON');
+  }
+
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as SlidesFile).slides)) {
+    throw new Error('slides.json must contain a slides array');
+  }
+
+  const slides = (parsed as SlidesFile).slides;
+  if (slides.length < 2 || slides.length > 8) {
+    throw new Error(`slides.json must declare between 2 and 8 slides, got ${slides.length}`);
+  }
+
+  const seen = new Set<string>();
+  for (const slide of slides) {
+    if (!slide || typeof slide !== 'object') {
+      throw new Error('slides.json contains an invalid slide entry');
+    }
+    if (typeof slide.id !== 'string' || !/^[a-z0-9-]+$/i.test(slide.id)) {
+      throw new Error(`slides.json has invalid slide id: ${String(slide.id)}`);
+    }
+    if (typeof slide.narrated !== 'boolean') {
+      throw new Error(`slides.json has invalid narrated flag for ${slide.id}`);
+    }
+    if (seen.has(slide.id)) {
+      throw new Error(`slides.json repeats slide id: ${slide.id}`);
+    }
+    seen.add(slide.id);
+  }
+
+  return { slides };
+}
+
+async function assertAuthoredFiles(workDir: string, slidesFile: SlidesFile): Promise<void> {
+  for (const slide of slidesFile.slides) {
+    const htmlPath = join(workDir, 'slides', `${slide.id}.html`);
+    if (!existsSync(htmlPath)) {
+      throw new Error(`Claude did not create required file: slides/${slide.id}.html`);
+    }
+    const htmlText = (await readFile(htmlPath, 'utf8')).trim();
+    if (!htmlText) {
+      throw new Error(`Claude created empty file: slides/${slide.id}.html`);
+    }
+
+    if (!slide.narrated) continue;
+
+    const narrationPath = join(workDir, 'narration', `${slide.id}.txt`);
+    const relPath = `narration/${slide.id}.txt`;
+    const filePath = narrationPath;
+    if (!existsSync(filePath)) {
+      throw new Error(`Claude did not create required file: ${relPath}`);
+    }
+    const text = (await readFile(filePath, 'utf8')).trim();
+    if (!text) {
+      throw new Error(`Claude created empty file: ${relPath}`);
+    }
+  }
+}
+
+async function writeManifest(workDir: string, promptText: string, slidesFile: SlidesFile): Promise<ManifestFile> {
+  const language = detectLanguage(promptText);
+  const manifest: ManifestFile = {
+    output: 'final.mp4',
+    fps: 30,
+    resolution: { width: 1920, height: 1080 },
+    voice: language === 'Chinese' ? 'presenter_male' : 'English_expressive_narrator',
+    language,
+    speechSpeed: 1.0,
+    leadInSec: 0.6,
+    tailSec: 0.6,
+    minSlideSec: 4,
+    sections: await Promise.all(
+      slidesFile.slides.map(async (slide) => {
+        const section: ManifestSection = {
+          id: slide.id,
+          html: `slides/${slide.id}.html`,
+        };
+        if (slide.narrated) {
+          section.narration = (await readFile(join(workDir, 'narration', `${slide.id}.txt`), 'utf8')).trim();
+        } else {
+          section.durationSec = 2;
+        }
+        return section;
+      }),
+    ),
+  };
+
+  if (manifest.sections.some((section) => section.narration === '')) {
+    throw new Error('Narration files must not be empty');
+  }
+
+  await writeFile(join(workDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  return manifest;
+}
+
+async function runDriver(projectRoot: string, manifestPath: string): Promise<void> {
+  await run('node', ['scripts/make-speech-video.mjs', manifestPath], { cwd: projectRoot });
+}
+
+async function verifyOutput(workDir: string, manifest: ManifestFile): Promise<VerificationResult> {
+  const finalPath = join(workDir, 'final.mp4');
+  if (!existsSync(finalPath)) {
+    throw new Error('Render did not produce final.mp4');
+  }
+
+  const streams = await ffprobeStreams(finalPath);
+  if (!streams.includes('video')) {
+    throw new Error('final.mp4 is missing a video stream');
+  }
+  if (!streams.includes('audio')) {
+    throw new Error('final.mp4 is missing an audio stream');
+  }
+
+  const tts = await collectTtsEvidence(workDir, manifest);
+  const expectedDurationSec = computeExpectedDuration(manifest, tts);
+  const durationSec = await ffprobeDuration(finalPath);
+  if (Math.abs(durationSec - expectedDurationSec) > 0.1) {
+    throw new Error(
+      `Duration mismatch: expected ${expectedDurationSec.toFixed(3)}s, got ${durationSec.toFixed(3)}s`,
+    );
+  }
+
+  const times = buildSampleTimes(durationSec);
+  const sampledFrames = [];
+  for (const timeSec of times) {
+    const frame = await sampleFrameSignalStats(finalPath, timeSec);
+    sampledFrames.push(frame);
+    if (frame.ymax <= frame.ymin) {
+      throw new Error(`Blank-frame check failed at ${timeSec.toFixed(2)}s`);
+    }
+  }
+
+  return {
+    durationSec,
+    expectedDurationSec,
+    sampledFrames,
+    streams,
+    tts,
+  };
+}
+
+async function collectTtsEvidence(
+  workDir: string,
+  manifest: ManifestFile,
+): Promise<Array<{ id: string; bytes: number; durationSec: number }>> {
+  const ttsDir = join(workDir, '.speech-video-work', 'tts');
+  const voicedSections = manifest.sections.filter((section) => section.narration);
+  const result = [];
+
+  for (const section of voicedSections) {
+    const mp3Path = join(ttsDir, `${section.id}.mp3`);
+    if (!existsSync(mp3Path)) {
+      throw new Error(`Missing narration audio: ${section.id}.mp3`);
+    }
+    const fileStat = await stat(mp3Path);
+    if (fileStat.size <= 5 * 1024) {
+      throw new Error(`Narration audio too small: ${section.id}.mp3 (${fileStat.size} bytes)`);
+    }
+    const durationSec = await ffprobeDuration(mp3Path);
+    if (!(durationSec > 0)) {
+      throw new Error(`Narration audio duration invalid: ${section.id}.mp3`);
+    }
+    result.push({
+      id: section.id,
+      bytes: fileStat.size,
+      durationSec,
+    });
+  }
+
+  return result;
+}
+
+function computeExpectedDuration(
+  manifest: ManifestFile,
+  tts: Array<{ id: string; durationSec: number }>,
+): number {
+  const ttsById = new Map(tts.map((item) => [item.id, item.durationSec]));
+  let total = 0;
+
+  for (const section of manifest.sections) {
+    const audioDurationSec = ttsById.get(section.id);
+    let durationSec = section.durationSec ?? manifest.minSlideSec;
+    if (audioDurationSec != null) {
+      durationSec = Math.max(manifest.minSlideSec, manifest.leadInSec + audioDurationSec + manifest.tailSec);
+    }
+    durationSec = Math.round(durationSec * manifest.fps) / manifest.fps;
+    total += durationSec;
+  }
+
+  return total;
+}
+
+function buildSampleTimes(durationSec: number): number[] {
+  const safeEnd = Math.max(0.2, durationSec - 0.2);
+  return [0.2, Math.max(0.2, durationSec / 2), safeEnd];
+}
+
+async function sampleFrameSignalStats(
+  videoPath: string,
+  timeSec: number,
+): Promise<{ timeSec: number; ymin: number; ymax: number }> {
+  const output = await run('ffmpeg', [
+    '-hide_banner',
+    '-ss',
+    timeSec.toFixed(3),
+    '-i',
+    videoPath,
+    '-frames:v',
+    '1',
+    '-vf',
+    'signalstats,metadata=print:file=-',
+    '-f',
+    'null',
+    '-',
+  ]);
+
+  const ymin = extractLastNumber(output, /lavfi\.signalstats\.YMIN=(\d+(?:\.\d+)?)/g);
+  const ymax = extractLastNumber(output, /lavfi\.signalstats\.YMAX=(\d+(?:\.\d+)?)/g);
+
+  if (ymin == null || ymax == null) {
+    throw new Error(`Could not read signalstats at ${timeSec.toFixed(2)}s`);
+  }
+
+  return { timeSec, ymin, ymax };
+}
+
+function extractLastNumber(text: string, pattern: RegExp): number | null {
+  const matches = [...text.matchAll(pattern)];
+  if (!matches.length) return null;
+  return Number(matches[matches.length - 1]?.[1]);
+}
+
+async function ffprobeStreams(filePath: string): Promise<string[]> {
+  const output = await run('ffprobe', [
+    '-v',
+    'error',
+    '-show_entries',
+    'stream=codec_type',
+    '-of',
+    'default=nw=1:nk=1',
+    filePath,
+  ]);
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+async function ffprobeDuration(filePath: string): Promise<number> {
+  const output = await run('ffprobe', [
+    '-v',
+    'error',
+    '-show_entries',
+    'format=duration',
+    '-of',
+    'default=nw=1:nk=1',
+    filePath,
+  ]);
+  return Number(output.trim());
+}
+
+function detectLanguage(promptText: string): 'Chinese' | 'English' {
+  return /[\u3400-\u9fff\uf900-\ufaff]/.test(promptText) ? 'Chinese' : 'English';
+}
+
+async function run(
+  command: string,
+  args: string[],
+  opts: { cwd?: string } = {},
+): Promise<string> {
+  return await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, args, {
+      cwd: opts.cwd,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', rejectPromise);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolvePromise([stdout, stderr].filter(Boolean).join('\n').trim());
+        return;
+      }
+      rejectPromise(
+        new Error(
+          `${command} exit ${code}: ${[stdout, stderr].filter(Boolean).join('\n').slice(-4000)}`,
+        ),
+      );
+    });
+  });
+}

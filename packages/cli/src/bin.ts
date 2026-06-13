@@ -4,6 +4,7 @@ import { bootstrap } from './context.js';
 import { setJsonMode, ok, fail } from './output.js';
 import { runDoctor } from './commands/doctor.js';
 import { listEngines } from './commands/list-engines.js';
+import { makeVideo } from './commands/make.js';
 import { searchTemplates, inspectTemplate } from './commands/templates.js';
 import {
   projectCreate,
@@ -19,6 +20,7 @@ import {
   projectRender,
 } from './commands/project.js';
 import { startStudioServer } from './studio-server.js';
+import { runWorker } from './commands/worker.js';
 
 // cac is a CJS default export; ESM interop sometimes wraps it in `.default`
 // biome-ignore lint/suspicious/noExplicitAny: cac's types don't expose this shape
@@ -29,6 +31,38 @@ const cli = cacFn('html-video');
 cli.option('--json', 'JSON output (default: on)', { default: true });
 cli.option('--no-color', 'disable ANSI colors');
 cli.option('--cwd <path>', 'project root');
+
+cli
+  .command('make <prompt>', 'Create a narrated MP4 from a written prompt')
+  .option('-o, --output <path>', 'Output MP4 path')
+  .action(async (prompt: string, opts: any) => {
+    setJsonMode(!!opts.json);
+    if (!opts.output) fail('invalid-input', '--output required');
+    const ctx = await bootstrap({ cwd: opts.cwd });
+    await makeVideo(ctx.projectRoot, prompt, {
+      output: opts.output,
+    });
+  });
+
+cli
+  .command('worker', 'Run the Mac mini worker (claim -> hv make -> upload)')
+  .option('--server <url>', 'WebUI base URL (required)')
+  .option('--secret <token>', 'WORKER_SECRET (required)')
+  .option('--worker-id <id>', 'Worker identifier', { default: 'macmini' })
+  .option('--poll-ms <ms>', 'Idle poll interval in ms', { default: 5000 })
+  .action(async (opts: any) => {
+    setJsonMode(!!opts.json);
+    if (!opts.server) fail('invalid-input', '--server required');
+    if (!opts.secret) fail('invalid-input', '--secret required');
+    const ctx = await bootstrap({ cwd: opts.cwd });
+    await runWorker({
+      server: opts.server,
+      secret: opts.secret,
+      workerId: opts.workerId,
+      pollMs: Number(opts.pollMs),
+      projectRoot: ctx.projectRoot,
+    });
+  });
 
 cli.command('doctor', 'Diagnose environment').action(async (opts: any) => {
   setJsonMode(!!opts.json);
@@ -207,32 +241,6 @@ cli
     process.on('SIGINT', () => {
       handle.close();
       process.exit(0);
-    });
-  });
-
-// ====== Worker (Mac Mini render agent) ======
-
-cli
-  .command('worker', 'Start the Mac Mini render worker (SSE-connected)')
-  .option('--server <url>', 'WebUI server URL (e.g. https://video-renderer.up.railway.app)')
-  .option('--secret <key>', 'Worker secret for authentication')
-  .option('--worker-id <id>', 'Custom worker ID (default: auto-generated)')
-  .action(async (opts: any) => {
-    const { startWorker } = await import('./worker.js');
-    const serverUrl = opts.server || process.env.WORKER_SERVER_URL;
-    const secret = opts.secret || process.env.WORKER_SECRET;
-    if (!serverUrl) {
-      console.error('Missing --server or WORKER_SERVER_URL');
-      process.exit(1);
-    }
-    if (!secret) {
-      console.error('Missing --secret or WORKER_SECRET');
-      process.exit(1);
-    }
-    await startWorker({
-      serverUrl,
-      workerSecret: secret,
-      workerId: opts.workerId,
     });
   });
 
