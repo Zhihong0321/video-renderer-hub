@@ -598,8 +598,9 @@ ${JSON.stringify(detailedCatalog, null, 2)}
 
 CRITICAL RULES:
 1. Pick the template whose "best_for" and category best match the user's intent
-2. Your "variables" object MUST use the EXACT input names from the template's "inputs" schema
-3. For example, if the template has inputs "headline", "label", "subtitle", "anchor" — your variables must use those exact keys, NOT "title" or "text"
+2. "variables" MUST be a FLAT OBJECT (not an array!) with the EXACT input names from the template's "inputs"
+3. For example, if the template has inputs "headline", "label", "subtitle", "anchor" — return:
+   "variables": { "label": "VALUE", "headline": "VALUE", "subtitle": "VALUE", "anchor": "VALUE" }
 4. For data templates (inputs include "data"), generate realistic data that supports the narrative
 5. For self-contained templates (no required inputs), just pick the right one
 6. Write a natural narration script (30-60 seconds) that tells the story
@@ -611,7 +612,7 @@ Respond in JSON only:
   "templateId": "the-template-id",
   "title": "compelling headline for narration",
   "narration": "spoken narration script in ${opts.language}",
-  "variables": { ... EXACT template input names with generated values ... }
+  "variables": { "exact_input_name": "generated_value", ... }
 }`;
 
   const res = await fetch(`${creds.baseUrl}/chat/completions`, {
@@ -637,13 +638,20 @@ Respond in JSON only:
   }
 
   const data = await res.json() as any;
-  const content = data.choices?.[0]?.message?.content || '';
+  let content = data.choices?.[0]?.message?.content || '';
+
+  // Strip <think>...</think> tags (M3 reasoning)
+  content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+  // Extract JSON from markdown code blocks if present
+  const codeBlockMatch = content.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+  if (codeBlockMatch) content = codeBlockMatch[1]!.trim();
 
   let plan: M3Plan;
   try {
     plan = JSON.parse(content);
   } catch {
-    // Try to extract JSON from the response
+    // Try to extract JSON object from the response
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error(`M3 returned non-JSON: ${content.slice(200)}`);
     plan = JSON.parse(jsonMatch[0]);
@@ -653,6 +661,15 @@ Respond in JSON only:
   if (!templates.find(t => t.id === plan.templateId)) {
     log(`M3 picked unknown template "${plan.templateId}", falling back to first`);
     plan.templateId = templates[0]!.id;
+  }
+
+  // Ensure variables is a flat object (M3 sometimes returns an array)
+  if (Array.isArray(plan.variables)) {
+    log('M3 returned variables as array, extracting first element');
+    plan.variables = plan.variables[0] || {};
+  }
+  if (typeof plan.variables !== 'object' || plan.variables === null) {
+    plan.variables = {};
   }
 
   return plan;
