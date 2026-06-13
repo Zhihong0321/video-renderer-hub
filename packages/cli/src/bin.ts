@@ -210,6 +210,32 @@ cli
     });
   });
 
+// ====== Worker (Mac Mini render agent) ======
+
+cli
+  .command('worker', 'Start the Mac Mini render worker (SSE-connected)')
+  .option('--server <url>', 'WebUI server URL (e.g. https://video-renderer.up.railway.app)')
+  .option('--secret <key>', 'Worker secret for authentication')
+  .option('--worker-id <id>', 'Custom worker ID (default: auto-generated)')
+  .action(async (opts: any) => {
+    const { startWorker } = await import('./worker.js');
+    const serverUrl = opts.server || process.env.WORKER_SERVER_URL;
+    const secret = opts.secret || process.env.WORKER_SECRET;
+    if (!serverUrl) {
+      console.error('Missing --server or WORKER_SERVER_URL');
+      process.exit(1);
+    }
+    if (!secret) {
+      console.error('Missing --secret or WORKER_SECRET');
+      process.exit(1);
+    }
+    await startWorker({
+      serverUrl,
+      workerSecret: secret,
+      workerId: opts.workerId,
+    });
+  });
+
 cli.help();
 cli.version('0.1.0');
 cli.parse();
