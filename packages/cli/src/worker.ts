@@ -555,65 +555,51 @@ interface M3Plan {
   variables: Record<string, any>;
 }
 
-/** Use MiniMax M3 to select the best template and generate content. */
+/** Use search-templates for selection, then M3 for content generation. */
 async function planWithM3(
   prompt: string,
   templates: TemplateInfo[],
   opts: { aspect: string; durationSec: number; language: string },
   creds: { apiKey: string; baseUrl: string },
 ): Promise<M3Plan> {
-  // Build template catalog for M3
-  const catalog = templates.map(t => ({
-    id: t.id,
-    name: t.name,
-    description: String(t.description || '').slice(0, 100),
-    category: t.category,
-    best_for: t.bestFor,
-    tags: t.tags,
-    inputs: Object.keys(t.inputs),
-    examples: t.examples.slice(0, 1),
-    aspects: t.aspects,
-    min_duration: t.minDuration,
-    max_duration: t.maxDuration,
-  }));
+  // Step 1: Use the project's own search-templates for reliable selection
+  const { searchTemplates } = await import('./commands/templates.js');
+  // searchTemplates needs a CliContext, but we can use the simpler scoring directly
+  // For now, use keyword matching on best_for and tags
+  const scored = templates.map(t => {
+    const words = prompt.toLowerCase().split(/\s+/);
+    const bf = Array.isArray(t.bestFor) ? t.bestFor : [];
+    const tg = Array.isArray(t.tags) ? t.tags : [];
+    const searchable = [...bf, ...tg, t.category || '', t.name || ''].join(' ').toLowerCase();
+    const matches = words.filter(w => w.length > 2 && searchable.includes(w)).length;
+    // Bonus for high-contrast templates (not mostly white)
+    const isHighContrast = tg.some((tag: string) => ['bold', 'dark', 'orange', 'red', 'glitch', 'cinema', 'hero'].includes(tag));
+    return { t, score: matches + (isHighContrast ? 0.5 : 0) };
+  }).sort((a, b) => b.score - a.score);
 
-  // Build detailed catalog with exact input names and examples
-  const detailedCatalog = templates.map(t => ({
-    id: t.id,
-    name: t.name,
-    description: String(t.description || '').slice(0, 100),
-    category: t.category,
-    best_for: t.bestFor,
-    inputs: t.inputs,
-    examples: t.examples.slice(0, 1),
-    required_inputs: Object.entries(t.inputs)
-      .filter(([, v]: [string, any]) => v.type !== 'number' || v.minimum === undefined)
-      .map(([k]) => k),
-  }));
+  const selected = scored[0]!.t;
+  log(`Template search: "${prompt.slice(0, 40)}…" → ${selected.id} (score ${scored[0]!.score})`);
 
-  const systemPrompt = `You are a video presentation designer. Given a user prompt, select the best template and generate content for it.
+  // Step 2: Use M3 ONLY to generate content for the selected template
+  const inputNames = Object.keys(selected.inputs);
+  const examples = selected.examples.slice(0, 1);
+  const exampleStr = examples.length > 0 ? `\nExample variables: ${JSON.stringify(examples[0])}` : '';
 
-Available templates:
-${JSON.stringify(detailedCatalog, null, 2)}
+  const systemPrompt = `You are a content writer. Generate content for a video template.
 
-CRITICAL RULES:
-1. Pick the template whose "best_for" and category best match the user's intent
-2. "variables" MUST be a FLAT OBJECT (not an array!) with the EXACT input names from the template's "inputs"
-3. For example, if the template has inputs "headline", "label", "subtitle", "anchor" — return:
-   "variables": { "label": "VALUE", "headline": "VALUE", "subtitle": "VALUE", "anchor": "VALUE" }
-4. For data templates (inputs include "data"), generate realistic data that supports the narrative
-5. For self-contained templates (no required inputs), just pick the right one
-6. Write a natural narration script (30-60 seconds) that tells the story
-7. Match the requested aspect ratio: ${opts.aspect}
-8. Language: ${opts.language}
+Template: ${selected.name} (${selected.id})
+Description: ${selected.description}
+Required inputs: ${inputNames.join(', ')}
+${exampleStr}
 
-Respond in JSON only:
-{
-  "templateId": "the-template-id",
-  "title": "compelling headline for narration",
-  "narration": "spoken narration script in ${opts.language}",
-  "variables": { "exact_input_name": "generated_value", ... }
-}`;
+RULES:
+1. "variables" MUST be a FLAT OBJECT with EXACT keys: ${inputNames.join(', ')}
+2. NOT an array. A single flat object.
+3. Values should be concise (headlines ≤12 chars, subtitles ≤120 chars)
+4. Write a natural narration script (30-60 seconds) in ${opts.language}
+
+Respond in JSON only (no markdown, no thinking):
+{"templateId":"${selected.id}","title":"...","narration":"...","variables":{${inputNames.map(k => `"${k}":"..."`).join(',')}}}`;
 
   const res = await fetch(`${creds.baseUrl}/chat/completions`, {
     method: 'POST',
