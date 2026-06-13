@@ -281,7 +281,11 @@ async function resolveMinimaxCreds(): Promise<{ apiKey: string; baseUrl: string 
     if (existsSync(cfgPath)) {
       const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
       const key = cfg.apiKey || cfg.api_key || '';
-      if (key) return { apiKey: key, baseUrl: 'https://api.minimax.io/v1' };
+      if (key) {
+        const base = (cfg.base_url || 'https://api.minimax.io').replace(/\/$/, '');
+        const baseUrl = base.endsWith('/v1') ? base : base + '/v1';
+        return { apiKey: key, baseUrl };
+      }
     }
   } catch {}
 
@@ -573,26 +577,41 @@ async function planWithM3(
     max_duration: t.maxDuration,
   }));
 
+  // Build detailed catalog with exact input names and examples
+  const detailedCatalog = templates.map(t => ({
+    id: t.id,
+    name: t.name,
+    description: String(t.description || '').slice(0, 100),
+    category: t.category,
+    best_for: t.bestFor,
+    inputs: t.inputs,
+    examples: t.examples.slice(0, 1),
+    required_inputs: Object.entries(t.inputs)
+      .filter(([, v]: [string, any]) => v.type !== 'number' || v.minimum === undefined)
+      .map(([k]) => k),
+  }));
+
   const systemPrompt = `You are a video presentation designer. Given a user prompt, select the best template and generate content for it.
 
 Available templates:
-${JSON.stringify(catalog, null, 2)}
+${JSON.stringify(detailedCatalog, null, 2)}
 
-Rules:
+CRITICAL RULES:
 1. Pick the template whose "best_for" and category best match the user's intent
-2. For data templates (inputs include "data"), generate realistic data that supports the narrative
-3. For text templates, craft compelling headlines and subtitles
-4. For self-contained templates (no required inputs), just pick the right one
-5. Write a natural narration script (30-60 seconds) that tells the story
-6. Match the requested aspect ratio: ${opts.aspect}
-7. Language: ${opts.language}
+2. Your "variables" object MUST use the EXACT input names from the template's "inputs" schema
+3. For example, if the template has inputs "headline", "label", "subtitle", "anchor" — your variables must use those exact keys, NOT "title" or "text"
+4. For data templates (inputs include "data"), generate realistic data that supports the narrative
+5. For self-contained templates (no required inputs), just pick the right one
+6. Write a natural narration script (30-60 seconds) that tells the story
+7. Match the requested aspect ratio: ${opts.aspect}
+8. Language: ${opts.language}
 
 Respond in JSON only:
 {
   "templateId": "the-template-id",
-  "title": "compelling headline",
+  "title": "compelling headline for narration",
   "narration": "spoken narration script in ${opts.language}",
-  "variables": { ... template inputs ... }
+  "variables": { ... EXACT template input names with generated values ... }
 }`;
 
   const res = await fetch(`${creds.baseUrl}/chat/completions`, {
