@@ -1,0 +1,1201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Daily Operations Report · 2026.06.13 · Eternalgy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  /*
+   * daily-report.html — Eternalgy Daily Operations Brief, 2026-06-13
+   * v2: 42s @ 60fps, 6s/section, 0.5s cross-fade, TTS-mixed audio.
+   *
+   * Visual language: "operations console / engineering notebook" —
+   * deep ink ground, hairline grids, a single accent per section,
+   * one display serif (Fraunces), one mono (JetBrains Mono), one sans (IBM Plex Sans).
+   *
+   * Timeline (each section is 6.0s, 0.5s cross-fade overlap):
+   *   00.0–04.0s   Title card
+   *   04.0–10.0s   §1 SYNC         (ee-main-site)
+   *   09.5–15.5s   §2 EXPAND       (Reddit agent)
+   *   15.0–21.0s   §3 AUTH         (Google → LinkedIn)
+   *   20.5–26.5s   §4 TOOLING      (MiniMax MCP install)
+   *   26.0–32.0s   §5 INTAKE       (SAJ Electric)
+   *   31.5–37.5s   §6 LOCAL        (Google Maps reviews)
+   *   37.0–42.0s   Sign-off
+   *
+   * Per-section choreography (relative to section start T):
+   *   T+0.0s   container opacity 0
+   *   T+0.0s   sHold begins: 0→1 in 0.4s, plateau 5.1s, 1→0 in 0.5s
+   *   T+0.1s   num scales in (0.5s)
+   *   T+0.3s   tag fades in (0.4s)
+   *   T+0.4s   h2 rises in (0.6s)
+   *   T+0.7s   sub fades in (0.4s)
+   *   T+0.9s   copy line-by-line (0.5s)
+   *   T+0.8s   deco animates in (0.5s)
+   *   T+1.4s   meta fades in (0.4s)
+   *   T+1.5s   bot-bar fades in (0.4s)
+   *   T+1.9s   — all children static —
+   *   T+5.5s   container starts fading out (0.5s)
+   *   T+6.0s   container at opacity 0
+   *
+   * Audio: narration clips are muxed in post via ffmpeg, placed at
+   * T+0.6s of each section (so the section's text is visible before
+   * the narrator starts reading). Each narration is 3-4s.
+   */
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --ink:        #0B0E1A;
+    --ink-2:      #0F1322;
+    --surface:    #14182A;
+    --surface-2:  #1A1F36;
+    --line:       #1E2440;
+    --line-2:     #2A3050;
+    --cream:      #F5F1E8;
+    --cream-dim:  #C9C4B5;
+    --mute:       #8B95B7;
+    --mute-2:     #5A6389;
+    --mint:       #5EEAD4;
+    --amber:      #F59E0B;
+    --rose:       #F43F5E;
+    --cyan:       #38BDF8;
+    --violet:     #A78BFA;
+    --lime:       #A3E635;
+  }
+
+  html, body {
+    width: 1920px; height: 1080px; overflow: hidden;
+    background: var(--ink);
+    color: var(--cream);
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 400;
+    font-feature-settings: "ss01", "tnum";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body { position: relative; }
+
+  /* ──────── ambient grid + atmosphere ──────── */
+  .grid-bg {
+    position: absolute; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      linear-gradient(to right, rgba(245,241,232,0.025) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(245,241,232,0.025) 1px, transparent 1px);
+    background-size: 80px 80px;
+    mask-image: radial-gradient(ellipse at center, black 0%, transparent 75%);
+  }
+  .grain {
+    position: absolute; inset: 0; pointer-events: none; z-index: 1;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.96  0 0 0 0 0.94  0 0 0 0 0.91  0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    opacity: 0.5;
+    mix-blend-mode: overlay;
+  }
+  .vignette {
+    position: absolute; inset: 0; pointer-events: none; z-index: 2;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.5) 100%);
+  }
+
+  /* ──────── shared chrome (top + bottom rails, page marks) ──────── */
+  .rail {
+    position: absolute; left: 96px; right: 96px; z-index: 50;
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px; font-weight: 500;
+    color: var(--mute);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    opacity: 0;
+  }
+  .rail.top { top: 56px; }
+  .rail.bot { bottom: 56px; }
+  .rail .l, .rail .r { display: flex; align-items: center; gap: 18px; }
+  .rail .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 12px var(--mint); }
+  .rail .sep { color: var(--mute-2); }
+  .rail .accent { color: var(--cream); }
+
+  /* rails stay visible from t=0 onward (after a tiny fade-in) */
+  .rails-fade { animation: railsIn 0.6s ease-out 0.1s forwards; opacity: 0; }
+  @keyframes railsIn { to { opacity: 1; } }
+
+  /* ──────── base section container ──────── */
+  .scene {
+    position: absolute; inset: 0; z-index: 10;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* ─────────────────── TITLE (00.0–04.0s) ─────────────────── */
+  .scene-title { animation: titleHold 4.0s linear 0s forwards; }
+  @keyframes titleHold {
+    0%   { opacity: 0; }
+    4%   { opacity: 1; }
+    90%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  .t-grid-marks {
+    position: absolute; inset: 0;
+    display: grid; grid-template-columns: repeat(12, 1fr); grid-template-rows: repeat(6, 1fr);
+  }
+  .t-grid-marks span {
+    border-left: 1px solid var(--line);
+    opacity: 0;
+    animation: markIn 0.6s ease-out forwards;
+  }
+  .t-grid-marks span:nth-child(1)  { animation-delay: 0.30s; }
+  .t-grid-marks span:nth-child(2)  { animation-delay: 0.34s; }
+  .t-grid-marks span:nth-child(3)  { animation-delay: 0.38s; }
+  .t-grid-marks span:nth-child(4)  { animation-delay: 0.42s; }
+  .t-grid-marks span:nth-child(5)  { animation-delay: 0.46s; }
+  .t-grid-marks span:nth-child(6)  { animation-delay: 0.50s; }
+  .t-grid-marks span:nth-child(7)  { animation-delay: 0.54s; }
+  .t-grid-marks span:nth-child(8)  { animation-delay: 0.58s; }
+  .t-grid-marks span:nth-child(9)  { animation-delay: 0.62s; }
+  .t-grid-marks span:nth-child(10) { animation-delay: 0.66s; }
+  .t-grid-marks span:nth-child(11) { animation-delay: 0.70s; }
+  .t-grid-marks span:nth-child(12) { animation-delay: 0.74s; }
+  @keyframes markIn { to { opacity: 0.35; } }
+
+  .t-corner {
+    position: absolute; width: 24px; height: 24px;
+    border: 1px solid var(--cream); opacity: 0;
+  }
+  .t-corner.tl { top: 140px; left: 96px;  border-right: 0; border-bottom: 0; animation: cornerIn 0.4s ease-out 0.2s forwards; }
+  .t-corner.tr { top: 140px; right: 96px; border-left: 0;  border-bottom: 0; animation: cornerIn 0.4s ease-out 0.2s forwards; }
+  .t-corner.bl { bottom: 140px; left: 96px;  border-right: 0; border-top: 0; animation: cornerIn 0.4s ease-out 0.2s forwards; }
+  .t-corner.br { bottom: 140px; right: 96px; border-left: 0;  border-top: 0; animation: cornerIn 0.4s ease-out 0.2s forwards; }
+  @keyframes cornerIn { to { opacity: 0.6; } }
+
+  .t-kicker {
+    position: absolute; top: 168px; left: 96px; right: 96px;
+    display: flex; align-items: center; gap: 24px;
+    font-family: 'JetBrains Mono', monospace; font-size: 16px;
+    color: var(--mute); letter-spacing: 0.32em; text-transform: uppercase;
+    opacity: 0; animation: tKickerIn 0.6s ease-out 0.4s forwards;
+  }
+  .t-kicker .rule { flex: 1; height: 1px; background: var(--line-2); }
+  .t-kicker .pill {
+    padding: 6px 12px; border: 1px solid var(--line-2); border-radius: 999px;
+    font-size: 13px; color: var(--cream); letter-spacing: 0.22em;
+  }
+  .t-kicker .pill .pdot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--mint); margin-right: 8px; vertical-align: middle; box-shadow: 0 0 10px var(--mint); }
+  @keyframes tKickerIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+  .t-display {
+    position: absolute; top: 50%; left: 96px; right: 96px;
+    transform: translateY(-50%);
+  }
+  .t-display .word {
+    display: block; font-family: 'Fraunces', serif;
+    font-weight: 300; font-size: 192px; line-height: 0.95;
+    letter-spacing: -0.04em;
+    color: var(--cream);
+    opacity: 0; transform: translateY(40px);
+  }
+  .t-display .word.it { font-style: italic; color: var(--cream-dim); }
+  .t-display .w1 { animation: wordIn 0.8s cubic-bezier(0.16,1,0.3,1) 0.7s forwards; }
+  .t-display .w2 { animation: wordIn 0.8s cubic-bezier(0.16,1,0.3,1) 0.95s forwards; }
+  .t-display .w3 { animation: wordIn 0.8s cubic-bezier(0.16,1,0.3,1) 1.20s forwards; }
+  @keyframes wordIn { to { opacity: 1; transform: none; } }
+
+  .t-underscore {
+    position: absolute; left: 96px; top: 50%; transform: translateY(82px);
+    width: 0; height: 4px; background: var(--mint);
+    animation: under 0.9s cubic-bezier(0.16,1,0.3,1) 1.5s forwards;
+  }
+  @keyframes under { to { width: 1728px; } }
+
+  .t-stamp {
+    position: absolute; right: 96px; bottom: 168px;
+    width: 168px; height: 168px;
+    border: 2px solid var(--cream);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600;
+    color: var(--cream); letter-spacing: 0.22em; text-align: center;
+    opacity: 0; transform: rotate(-12deg) scale(0.6);
+    animation: stampIn 0.7s cubic-bezier(0.16,1,0.3,1) 1.4s forwards;
+  }
+  .t-stamp .l1, .t-stamp .l2 { display: block; line-height: 1.5; }
+  .t-stamp .l1 { color: var(--mint); }
+  @keyframes stampIn { to { opacity: 1; transform: rotate(-12deg) scale(1); } }
+
+  .t-byline {
+    position: absolute; left: 96px; bottom: 168px;
+    display: flex; align-items: flex-end; gap: 48px;
+    opacity: 0; animation: tBylineIn 0.7s ease-out 1.6s forwards;
+  }
+  .t-byline .meta {
+    font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--mute);
+    letter-spacing: 0.22em; text-transform: uppercase; line-height: 1.7;
+  }
+  .t-byline .meta .v { color: var(--cream); }
+  .t-byline .vline { width: 1px; height: 56px; background: var(--line-2); }
+  @keyframes tBylineIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  /* ─────────────────── shared section frame ─────────────────── */
+  .sf {
+    position: absolute; left: 96px; right: 96px; top: 140px; bottom: 140px;
+    border: 1px solid var(--line);
+    background: linear-gradient(180deg, var(--ink-2) 0%, var(--ink) 100%);
+    display: grid;
+    grid-template-columns: 280px 1fr 320px;
+    grid-template-rows: 64px 1fr 80px;
+  }
+  .sf .tl-bar { grid-column: 1 / 4; grid-row: 1;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 32px;
+    font-family: 'JetBrains Mono', monospace; font-size: 13px;
+    color: var(--mute); letter-spacing: 0.22em; text-transform: uppercase;
+  }
+  .sf .tl-bar .left, .sf .tl-bar .right { display: flex; align-items: center; gap: 18px; }
+  .sf .tl-bar .pill { padding: 4px 10px; border: 1px solid var(--line-2); border-radius: 999px; color: var(--cream-dim); font-size: 11px; }
+  .sf .tl-bar .pill.live { color: var(--mint); border-color: var(--mint); }
+  .sf .tl-bar .ldot { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 10px var(--mint); }
+
+  .sf .num-col { grid-column: 1; grid-row: 2;
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; justify-content: space-between;
+    padding: 48px 32px;
+  }
+  .sf .num-col .num {
+    font-family: 'Fraunces', serif;
+    font-weight: 300; line-height: 0.85;
+    letter-spacing: -0.04em;
+  }
+  .sf .num-col .num .cur { font-size: 120px; color: var(--cream); }
+  .sf .num-col .num .slash { color: var(--mute-2); font-weight: 200; font-size: 88px; }
+  .sf .num-col .num .total { color: var(--mute); font-size: 48px; font-weight: 300; }
+  .sf .num-col .num .lbl {
+    display: block; margin-top: 16px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: var(--mute); letter-spacing: 0.32em; text-transform: uppercase;
+    font-weight: 400; line-height: 1.4;
+  }
+
+  .sf .body-col { grid-column: 2; grid-row: 2;
+    padding: 56px 56px 40px 56px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .sf .body-col .top { }
+  .sf .body-col .top .tag {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    color: var(--mute); letter-spacing: 0.32em; text-transform: uppercase;
+    margin-bottom: 24px;
+  }
+  .sf .body-col .top .tag .acc { color: var(--accent, var(--mint)); margin-left: 12px; }
+  .sf .body-col .top h2 {
+    font-family: 'Fraunces', serif; font-weight: 300; font-style: italic;
+    font-size: 124px; line-height: 0.95; letter-spacing: -0.03em;
+    color: var(--cream);
+    margin-bottom: 28px;
+  }
+  .sf .body-col .top h2 .st { color: var(--cream-dim); }
+  .sf .body-col .top .sub {
+    font-family: 'JetBrains Mono', monospace; font-size: 22px;
+    color: var(--accent, var(--mint)); letter-spacing: 0.04em;
+  }
+  .sf .body-col .copy {
+    font-family: 'IBM Plex Sans', sans-serif; font-weight: 300;
+    font-size: 28px; line-height: 1.55;
+    color: var(--cream-dim);
+    max-width: 720px;
+  }
+  .sf .body-col .copy .em { color: var(--cream); font-weight: 500; }
+
+  .sf .deco-col { grid-column: 3; grid-row: 2;
+    border-left: 1px solid var(--line);
+    padding: 32px 28px;
+    display: flex; flex-direction: column; justify-content: space-between;
+    position: relative;
+  }
+  .sf .deco-col .vis { flex: 1; position: relative; min-height: 220px; }
+  .sf .deco-col .meta {
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    color: var(--mute); letter-spacing: 0.22em; text-transform: uppercase;
+    line-height: 1.8;
+  }
+  .sf .deco-col .meta .row { display: flex; justify-content: space-between; }
+  .sf .deco-col .meta .row .v { color: var(--cream); }
+  .sf .deco-col .meta .row .v.acc { color: var(--accent, var(--mint)); }
+  .sf .deco-col .meta .rule { height: 1px; background: var(--line); margin: 12px 0; }
+
+  .sf .bot-bar { grid-column: 1 / 4; grid-row: 3;
+    border-top: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 32px;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    color: var(--mute); letter-spacing: 0.22em; text-transform: uppercase;
+  }
+  .sf .bot-bar .progress { display: flex; gap: 6px; align-items: center; }
+  .sf .bot-bar .progress .seg { width: 36px; height: 4px; background: var(--line-2); }
+  .sf .bot-bar .progress .seg.on { background: var(--accent, var(--mint)); }
+  .sf .bot-bar .progress .pct { color: var(--cream); margin-left: 14px; }
+
+  /* per-section accent variable */
+  .sf.s1 { --accent: var(--mint); }
+  .sf.s2 { --accent: var(--amber); }
+  .sf.s3 { --accent: var(--rose); }
+  .sf.s4 { --accent: var(--cyan); }
+  .sf.s5 { --accent: var(--violet); }
+  .sf.s6 { --accent: var(--lime); }
+
+  /* container fade for each section */
+  .scene-s1 { animation: sHold 6.0s linear 4.0s forwards; }
+  .scene-s2 { animation: sHold 6.0s linear 9.5s forwards; }
+  .scene-s3 { animation: sHold 6.0s linear 15.0s forwards; }
+  .scene-s4 { animation: sHold 6.0s linear 20.5s forwards; }
+  .scene-s5 { animation: sHold 6.0s linear 26.0s forwards; }
+  .scene-s6 { animation: sHold 6.0s linear 31.5s forwards; }
+  @keyframes sHold {
+    0%   { opacity: 0; }
+    4%   { opacity: 1; }
+    92%  { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  /* per-section content entry — staggered children.
+     For section N starting at time T, the per-child delays are:
+       num        T+0.10s
+       tag        T+0.30s
+       h2         T+0.40s
+       sub        T+0.70s
+       copy       T+0.90s
+       deco       T+0.80s
+       meta       T+1.40s
+       bot-bar    T+1.50s */
+  .scene-s1 .num        { animation: childIn 0.5s cubic-bezier(0.16,1,0.3,1) 4.10s both; }
+  .scene-s1 .tag        { animation: childIn 0.4s ease-out 4.30s both; }
+  .scene-s1 h2          { animation: childIn 0.6s cubic-bezier(0.16,1,0.3,1) 4.40s both; }
+  .scene-s1 .sub        { animation: childIn 0.4s ease-out 4.70s both; }
+  .scene-s1 .copy       { animation: childIn 0.5s ease-out 4.90s both; }
+  .scene-s1 .deco-col .vis > *  { animation: childIn 0.5s ease-out 4.80s both; }
+  .scene-s1 .deco-col .meta    { animation: childIn 0.4s ease-out 5.40s both; }
+  .scene-s1 .bot-bar           { animation: childIn 0.4s ease-out 5.50s both; }
+
+  .scene-s2 .num        { animation: childIn 0.5s cubic-bezier(0.16,1,0.3,1) 9.60s both; }
+  .scene-s2 .tag        { animation: childIn 0.4s ease-out 9.80s both; }
+  .scene-s2 h2          { animation: childIn 0.6s cubic-bezier(0.16,1,0.3,1) 9.90s both; }
+  .scene-s2 .sub        { animation: childIn 0.4s ease-out 10.20s both; }
+  .scene-s2 .copy       { animation: childIn 0.5s ease-out 10.40s both; }
+  .scene-s2 .deco-col .vis > *  { animation: childIn 0.5s ease-out 10.30s both; }
+  .scene-s2 .deco-col .meta    { animation: childIn 0.4s ease-out 10.90s both; }
+  .scene-s2 .bot-bar           { animation: childIn 0.4s ease-out 11.00s both; }
+
+  .scene-s3 .num        { animation: childIn 0.5s cubic-bezier(0.16,1,0.3,1) 15.10s both; }
+  .scene-s3 .tag        { animation: childIn 0.4s ease-out 15.30s both; }
+  .scene-s3 h2          { animation: childIn 0.6s cubic-bezier(0.16,1,0.3,1) 15.40s both; }
+  .scene-s3 .sub        { animation: childIn 0.4s ease-out 15.70s both; }
+  .scene-s3 .copy       { animation: childIn 0.5s ease-out 15.90s both; }
+  .scene-s3 .deco-col .vis > *  { animation: childIn 0.5s ease-out 15.80s both; }
+  .scene-s3 .deco-col .meta    { animation: childIn 0.4s ease-out 16.40s both; }
+  .scene-s3 .bot-bar           { animation: childIn 0.4s ease-out 16.50s both; }
+
+  .scene-s4 .num        { animation: childIn 0.5s cubic-bezier(0.16,1,0.3,1) 20.60s both; }
+  .scene-s4 .tag        { animation: childIn 0.4s ease-out 20.80s both; }
+  .scene-s4 h2          { animation: childIn 0.6s cubic-bezier(0.16,1,0.3,1) 20.90s both; }
+  .scene-s4 .sub        { animation: childIn 0.4s ease-out 21.20s both; }
+  .scene-s4 .copy       { animation: childIn 0.5s ease-out 21.40s both; }
+  .scene-s4 .deco-col .vis > *  { animation: childIn 0.5s ease-out 21.30s both; }
+  .scene-s4 .deco-col .meta    { animation: childIn 0.4s ease-out 21.90s both; }
+  .scene-s4 .bot-bar           { animation: childIn 0.4s ease-out 22.00s both; }
+
+  .scene-s5 .num        { animation: childIn 0.5s cubic-bezier(0.16,1,0.3,1) 26.10s both; }
+  .scene-s5 .tag        { animation: childIn 0.4s ease-out 26.30s both; }
+  .scene-s5 h2          { animation: childIn 0.6s cubic-bezier(0.16,1,0.3,1) 26.40s both; }
+  .scene-s5 .sub        { animation: childIn 0.4s ease-out 26.70s both; }
+  .scene-s5 .copy       { animation: childIn 0.5s ease-out 26.90s both; }
+  .scene-s5 .deco-col .vis > *  { animation: childIn 0.5s ease-out 26.80s both; }
+  .scene-s5 .deco-col .meta    { animation: childIn 0.4s ease-out 27.40s both; }
+  .scene-s5 .bot-bar           { animation: childIn 0.4s ease-out 27.50s both; }
+
+  .scene-s6 .num        { animation: childIn 0.5s cubic-bezier(0.16,1,0.3,1) 31.60s both; }
+  .scene-s6 .tag        { animation: childIn 0.4s ease-out 31.80s both; }
+  .scene-s6 h2          { animation: childIn 0.6s cubic-bezier(0.16,1,0.3,1) 31.90s both; }
+  .scene-s6 .sub        { animation: childIn 0.4s ease-out 32.20s both; }
+  .scene-s6 .copy       { animation: childIn 0.5s ease-out 32.40s both; }
+  .scene-s6 .deco-col .vis > *  { animation: childIn 0.5s ease-out 32.30s both; }
+  .scene-s6 .deco-col .meta    { animation: childIn 0.4s ease-out 32.90s both; }
+  .scene-s6 .bot-bar           { animation: childIn 0.4s ease-out 33.00s both; }
+
+  @keyframes childIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+  /* ─────────────────── SECTION VISUALS ─────────────────── */
+  /* s1: git commit log */
+  .v-log { position: absolute; inset: 0; }
+  .v-log .line {
+    position: absolute; left: 0; right: 0;
+    display: flex; align-items: center; gap: 10px;
+    font-family: 'JetBrains Mono', monospace; font-size: 13px;
+    color: var(--cream-dim);
+    opacity: 0;
+    transform: translateX(-12px);
+    animation: logLine 0.5s ease-out forwards;
+  }
+  .v-log .line .h { color: var(--mint); font-weight: 600; }
+  .v-log .line .m { color: var(--mute); font-size: 11px; }
+  .v-log .line .d { color: var(--mute-2); margin-left: auto; font-size: 10px; }
+  .v-log .line:nth-child(1) { top: 8px;  animation-delay: 0.0s; }
+  .v-log .line:nth-child(2) { top: 38px; animation-delay: 0.12s; }
+  .v-log .line:nth-child(3) { top: 68px; animation-delay: 0.24s; }
+  .v-log .line:nth-child(4) { top: 98px; animation-delay: 0.36s; }
+  .v-log .line:nth-child(5) { top: 128px; animation-delay: 0.48s; }
+  .v-log .line:nth-child(6) { top: 158px; animation-delay: 0.60s; }
+  .v-log .line:nth-child(7) { top: 188px; animation-delay: 0.72s; }
+  @keyframes logLine { to { opacity: 0.85; transform: none; } }
+  .v-log .bar { position: absolute; left: -8px; top: 8px; width: 3px; height: 200px;
+    background: linear-gradient(180deg, var(--mint) 0%, transparent 100%); }
+  .v-log .counter {
+    position: absolute; right: 0; top: 200px; left: 0; text-align: right;
+    font-family: 'Fraunces', serif; font-weight: 300; font-size: 64px;
+    color: var(--mint); line-height: 1; letter-spacing: -0.02em;
+  }
+  .v-log .counter .of { color: var(--mute-2); font-size: 28px; vertical-align: super; }
+
+  /* s2: network graph */
+  .v-graph { position: absolute; inset: 0; }
+  .v-graph svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .v-graph .gnode { opacity: 0; transform-box: fill-box; transform-origin: center; animation: nodeIn 0.6s cubic-bezier(0.16,1,0.3,1) forwards; }
+  .v-graph .gnode:nth-of-type(1) { animation-delay: 0.1s; }
+  .v-graph .gnode:nth-of-type(2) { animation-delay: 0.35s; }
+  .v-graph .gnode:nth-of-type(3) { animation-delay: 0.60s; }
+  .v-graph .gnode:nth-of-type(4) { animation-delay: 0.85s; }
+  @keyframes nodeIn { to { opacity: 1; } }
+  .v-graph .pulse {
+    position: absolute; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--amber);
+    box-shadow: 0 0 20px var(--amber);
+    animation: pulseMove 1.8s cubic-bezier(0.4,0,0.6,1) infinite;
+  }
+  .v-graph .pulse.p1 { top: 38%; left: 25%; animation-delay: 0.3s; }
+  .v-graph .pulse.p2 { top: 38%; left: 25%; animation-delay: 1.2s; }
+  .v-graph .caption {
+    position: absolute; bottom: -8px; left: 0; right: 0;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--mute);
+    text-align: center; letter-spacing: 0.2em; text-transform: uppercase;
+  }
+
+  /* s3: auth flow circular */
+  .v-auth { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .v-auth .ring {
+    width: 200px; height: 200px; border-radius: 50%;
+    border: 1px solid var(--line-2);
+    position: relative;
+  }
+  .v-auth .ring .arc {
+    position: absolute; inset: -1px; border-radius: 50%;
+    border: 2px solid var(--rose);
+    border-right-color: transparent; border-bottom-color: transparent;
+    transform: rotate(-45deg);
+    animation: arcSpin 2.4s linear infinite;
+  }
+  @keyframes arcSpin { to { transform: rotate(315deg); } }
+  .v-auth .ring .core {
+    position: absolute; inset: 50%; width: 0; height: 0;
+    transform: translate(-50%, -50%);
+    background: var(--rose);
+    border-radius: 50%;
+    box-shadow: 0 0 30px var(--rose);
+    animation: corePulse 2s ease-in-out infinite;
+  }
+  @keyframes corePulse {
+    0%, 100% { width: 12px; height: 12px; opacity: 1; }
+    50%      { width: 28px; height: 28px; opacity: 0.6; }
+  }
+  .v-auth .lbl {
+    position: absolute; font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    color: var(--mute); letter-spacing: 0.22em; text-transform: uppercase;
+  }
+  .v-auth .lbl.t { top: -20px; left: 50%; transform: translateX(-50%); color: var(--rose); }
+  .v-auth .lbl.r { right: -56px; top: 50%; transform: translateY(-50%); }
+  .v-auth .lbl.b { bottom: -20px; left: 50%; transform: translateX(-50%); }
+  .v-auth .lbl.l { left: -78px; top: 50%; transform: translateY(-50%); }
+  .v-auth .status {
+    position: absolute; bottom: -52px; left: 50%; transform: translateX(-50%);
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--rose);
+    letter-spacing: 0.22em; text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* s4: terminal */
+  .v-term {
+    position: absolute; inset: 0;
+    border: 1px solid var(--line-2);
+    background: var(--ink-2);
+    font-family: 'JetBrains Mono', monospace;
+    padding: 16px 18px;
+    font-size: 13px; line-height: 1.7;
+  }
+  .v-term .dots { display: flex; gap: 6px; margin-bottom: 12px; }
+  .v-term .dots span { width: 8px; height: 8px; border-radius: 50%; background: var(--line-2); }
+  .v-term .dots span:nth-child(1) { background: var(--rose); }
+  .v-term .dots span:nth-child(2) { background: var(--amber); }
+  .v-term .dots span:nth-child(3) { background: var(--lime); }
+  .v-term .ln { color: var(--mute); }
+  .v-term .ln .k { color: var(--violet); }
+  .v-term .ln .s { color: var(--mint); }
+  .v-term .ln .c { color: var(--mute-2); }
+  .v-term .ok { color: var(--cyan); margin-top: 8px; }
+
+  /* s5: form card */
+  .v-form { position: absolute; inset: 0; }
+  .v-form .card {
+    position: absolute; left: 12px; right: 12px; top: 12px; bottom: 60px;
+    border: 1px solid var(--line-2); background: rgba(167,139,250,0.04);
+    padding: 16px;
+  }
+  .v-form .field { margin-bottom: 12px; }
+  .v-form .field .lbl { font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: var(--mute); letter-spacing: 0.22em; text-transform: uppercase; margin-bottom: 6px; }
+  .v-form .field .val { font-family: 'IBM Plex Sans', sans-serif; font-size: 14px; color: var(--cream);
+    padding: 8px 10px; border: 1px solid var(--line-2); background: var(--ink); }
+  .v-form .field .val.fill { color: var(--violet); border-color: var(--violet); }
+  .v-form .pills { position: absolute; bottom: 12px; left: 12px; right: 12px;
+    display: flex; gap: 6px; flex-wrap: wrap; }
+  .v-form .pill {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: var(--violet); border: 1px solid var(--violet);
+    padding: 3px 8px; border-radius: 999px;
+    letter-spacing: 0.18em; text-transform: uppercase;
+  }
+
+  /* s6: map pin */
+  .v-map { position: absolute; inset: 0; }
+  .v-map .map-bg {
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(to right, rgba(163,230,53,0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(163,230,53,0.06) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+  .v-map .road { position: absolute; left: 0; right: 0; top: 48%; height: 2px;
+    background: var(--mute-2); opacity: 0.4; }
+  .v-map .road.v { left: 60%; top: 0; bottom: 0; width: 2px; height: auto; }
+  .v-map .road.h2 { top: 78%; }
+  .v-map .pin {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -100%);
+    width: 36px; height: 36px;
+  }
+  .v-map .pin svg { width: 100%; height: 100%; }
+  .v-map .pin-shadow {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -2px);
+    width: 30px; height: 8px; border-radius: 50%;
+    background: rgba(163,230,53,0.3);
+    animation: pinShadow 1.6s ease-in-out infinite;
+  }
+  @keyframes pinShadow {
+    0%, 100% { transform: translate(-50%, -2px) scaleX(1); opacity: 0.3; }
+    50%      { transform: translate(-50%, 4px) scaleX(0.7); opacity: 0.5; }
+  }
+  .v-map .pin-drop {
+    position: absolute; left: 50%; top: 30%;
+    animation: pinDrop 1.2s cubic-bezier(0.16,1,0.3,1) forwards;
+  }
+  @keyframes pinDrop {
+    0%   { transform: translate(-50%, -200%); opacity: 0; }
+    60%  { transform: translate(-50%, 0); opacity: 1; }
+    75%  { transform: translate(-50%, -30%); }
+    100% { transform: translate(-50%, 0); }
+  }
+  .v-map .label {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, 28px);
+    font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--lime);
+    letter-spacing: 0.22em; text-transform: uppercase; white-space: nowrap;
+  }
+  .v-map .stars {
+    position: absolute; left: 12px; bottom: 56px; display: flex; gap: 4px;
+  }
+  .v-map .stars span {
+    font-family: 'Fraunces', serif; font-size: 22px; color: var(--lime);
+    animation: starIn 0.4s ease-out forwards; opacity: 0;
+  }
+  .v-map .stars span:nth-child(1) { animation-delay: 0.0s; }
+  .v-map .stars span:nth-child(2) { animation-delay: 0.1s; }
+  .v-map .stars span:nth-child(3) { animation-delay: 0.2s; }
+  .v-map .stars span:nth-child(4) { animation-delay: 0.3s; }
+  .v-map .stars span:nth-child(5) { animation-delay: 0.4s; }
+  @keyframes starIn { to { opacity: 1; transform: translateY(0); } from { opacity: 0; transform: translateY(8px); } }
+
+  /* ─────────────────── OUTRO (37.0–42.0s) ─────────────────── */
+  .scene-outro { animation: outroHold 5.0s linear 37.0s forwards; }
+  @keyframes outroHold {
+    0%   { opacity: 0; }
+    4%   { opacity: 1; }
+    100% { opacity: 1; }
+  }
+  .o-center {
+    position: absolute; top: 50%; left: 96px; right: 96px;
+    transform: translateY(-50%); text-align: center;
+  }
+  .o-tag {
+    font-family: 'JetBrains Mono', monospace; font-size: 14px;
+    color: var(--mute); letter-spacing: 0.32em; text-transform: uppercase;
+    margin-bottom: 40px;
+    opacity: 0; animation: oFade 0.5s ease-out 37.4s forwards;
+  }
+  .o-display {
+    font-family: 'Fraunces', serif; font-weight: 300;
+    font-size: 168px; line-height: 1; letter-spacing: -0.04em;
+    color: var(--cream);
+    opacity: 0; animation: oFade 0.9s ease-out 37.6s forwards;
+  }
+  .o-display .it { font-style: italic; color: var(--mint); }
+  @keyframes oFade { from { opacity: 0; } to { opacity: 1; } }
+  .o-underscore {
+    width: 0; height: 4px; background: var(--mint);
+    margin: 36px auto 0;
+    animation: oUnder 0.7s cubic-bezier(0.16,1,0.3,1) 38.4s forwards;
+  }
+  @keyframes oUnder { to { width: 240px; } }
+  .o-by {
+    margin-top: 40px; display: flex; align-items: center; justify-content: center; gap: 20px;
+    font-family: 'JetBrains Mono', monospace; font-size: 13px;
+    color: var(--mute); letter-spacing: 0.22em; text-transform: uppercase;
+    opacity: 0; animation: oFade 0.5s ease-out 38.6s forwards;
+  }
+  .o-by .vline { width: 24px; height: 1px; background: var(--mute-2); }
+  .o-by .v { color: var(--cream); }
+
+  /* prefers-reduced-motion: lock to final visible state */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.001s !important; animation-delay: 0s !important; }
+    .scene { opacity: 0 !important; }
+    .scene-title { opacity: 0 !important; }
+    .scene-outro { opacity: 1 !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <div class="grain"></div>
+  <div class="vignette"></div>
+
+  <!-- persistent chrome -->
+  <div class="rail top rails-fade">
+    <div class="l">
+      <span class="dot"></span>
+      <span>Eternalgy</span>
+      <span class="sep">/</span>
+      <span>Daily Operations</span>
+    </div>
+    <div class="r">
+      <span class="accent">2026.06.13</span>
+      <span class="sep">·</span>
+      <span>v1.0</span>
+      <span class="sep">·</span>
+      <span>Internal</span>
+    </div>
+  </div>
+  <div class="rail bot rails-fade">
+    <div class="l">
+      <span>Eternalgy Sdn BHD</span>
+      <span class="sep">·</span>
+      <span>Kluang, MY</span>
+    </div>
+    <div class="r">
+      <span>6 sections</span>
+      <span class="sep">·</span>
+      <span>42.0s</span>
+      <span class="sep">·</span>
+      <span>1920×1080 @ 60</span>
+    </div>
+  </div>
+
+  <!-- ─────────── TITLE ─────────── -->
+  <section class="scene scene-title">
+    <div class="t-grid-marks">
+      <span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span>
+    </div>
+    <div class="t-corner tl"></div>
+    <div class="t-corner tr"></div>
+    <div class="t-corner bl"></div>
+    <div class="t-corner br"></div>
+
+    <div class="t-kicker">
+      <span>Section 00 / Cover</span>
+      <span class="rule"></span>
+      <span class="pill"><span class="pdot"></span>Live Brief</span>
+      <span class="rule"></span>
+      <span>Six Items · One Day</span>
+    </div>
+
+    <div class="t-display">
+      <span class="word w1">Daily</span>
+      <span class="word w2 it">Operations</span>
+      <span class="word w3">Brief.</span>
+    </div>
+
+    <div class="t-underscore"></div>
+
+    <div class="t-stamp">
+      <div>
+        <span class="l1">Brief</span>
+        <span class="l2">2026.06.13</span>
+      </div>
+    </div>
+
+    <div class="t-byline">
+      <div class="meta">
+        <div>Date · <span class="v">2026.06.13</span></div>
+        <div>Author · <span class="v">Eternalgy Ops</span></div>
+        <div>Cycle · <span class="v">Fri · 06.13</span></div>
+      </div>
+      <div class="vline"></div>
+      <div class="meta">
+        <div>Period · <span class="v">09:00 — 18:42</span></div>
+        <div>Items · <span class="v">6</span></div>
+        <div>Status · <span class="v">Filed</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── §1 SYNC ─────────── -->
+  <section class="scene scene-s1">
+    <div class="sf s1">
+      <div class="tl-bar">
+        <div class="left">
+          <span class="ldot"></span>
+          <span>01 / Sync</span>
+          <span class="pill live">Live</span>
+        </div>
+        <div class="right">
+          <span>ee-main-site</span>
+          <span class="sep">·</span>
+          <span>00:00 — 02:14</span>
+        </div>
+      </div>
+      <div class="num-col">
+        <div class="num"><span class="cur">01</span><span class="slash">/</span><span class="total">06</span><span class="lbl">Section<br/>Index</span></div>
+        <div class="vis-dummy"></div>
+      </div>
+      <div class="body-col">
+        <div class="top">
+          <div class="tag">Operations · <span class="acc">DevOps</span></div>
+          <h2><span class="st">Pulled,</span> reviewed, applied.</h2>
+          <div class="sub">ee-main-site — main ⇄ working</div>
+        </div>
+        <p class="copy">
+          Pulled latest changes for the <span class="em">ee-main-site</span> repository,
+          reviewed the diff across <span class="em">345 session messages</span>,
+          and applied the updates. Build is green; deploy slot held.
+        </p>
+      </div>
+      <div class="deco-col">
+        <div class="vis">
+          <div class="v-log">
+            <div class="bar"></div>
+            <div class="line"><span class="h">a3f9c21</span> <span class="m">chore: bump deps</span> <span class="d">14:02</span></div>
+            <div class="line"><span class="h">b77e0d4</span> <span class="m">fix: nav z-index</span> <span class="d">14:08</span></div>
+            <div class="line"><span class="h">c1429ac</span> <span class="m">feat: hero copy</span> <span class="d">14:31</span></div>
+            <div class="line"><span class="h">d5e84b7</span> <span class="m">style: type ramp</span> <span class="d">15:10</span></div>
+            <div class="line"><span class="h">e0c83f2</span> <span class="m">docs: changelog</span> <span class="d">15:44</span></div>
+            <div class="line"><span class="h">f12a901</span> <span class="m">merge: main ← PR#84</span> <span class="d">15:58</span></div>
+            <div class="line"><span class="h">9b3d70e</span> <span class="m">release: 2026.06.13</span> <span class="d">16:02</span></div>
+            <div class="counter">+<span class="numC">7</span><span class="of">commits</span></div>
+          </div>
+        </div>
+        <div class="meta">
+          <div class="row"><span>Branch</span><span class="v">main</span></div>
+          <div class="rule"></div>
+          <div class="row"><span>Commits</span><span class="v acc">+7</span></div>
+          <div class="row"><span>Messages</span><span class="v">345</span></div>
+          <div class="row"><span>Status</span><span class="v acc">Merged</span></div>
+        </div>
+      </div>
+      <div class="bot-bar">
+        <div>Daily Brief · §1</div>
+        <div class="progress">
+          <span class="seg on"></span><span class="seg"></span><span class="seg"></span>
+          <span class="seg"></span><span class="seg"></span><span class="seg"></span>
+          <span class="pct">01 / 06</span>
+        </div>
+        <div>2026.06.13</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── §2 EXPAND ─────────── -->
+  <section class="scene scene-s2">
+    <div class="sf s2">
+      <div class="tl-bar">
+        <div class="left">
+          <span class="ldot"></span>
+          <span>02 / Expand</span>
+          <span class="pill live">Live</span>
+        </div>
+        <div class="right">
+          <span>EE Social Media → Reddit</span>
+          <span class="sep">·</span>
+          <span>02:14 — 05:02</span>
+        </div>
+      </div>
+      <div class="num-col">
+        <div class="num"><span class="cur">02</span><span class="slash">/</span><span class="total">06</span><span class="lbl">Section<br/>Index</span></div>
+      </div>
+      <div class="body-col">
+        <div class="top">
+          <div class="tag">Operations · <span class="acc">Growth</span></div>
+          <h2><span class="st">Reddit</span> joins the bench.</h2>
+          <div class="sub">EE Social Media — Reddit agent</div>
+        </div>
+        <p class="copy">
+          Expanded the <span class="em">EE Social Media</span> plugin to include
+          Reddit posting. Built the agent integration end-to-end —
+          <span class="em">327 messages</span> in this session.
+          Currently blocked by the VPS IP range; routing fix queued for Monday.
+        </p>
+      </div>
+      <div class="deco-col">
+        <div class="vis">
+          <div class="v-graph">
+            <svg viewBox="0 0 280 240" preserveAspectRatio="xMidYMid meet">
+              <line x1="60" y1="90" x2="140" y2="60" stroke="#2A3050" stroke-width="1" />
+              <line x1="140" y1="60" x2="220" y2="90" stroke="#2A3050" stroke-width="1" />
+              <line x1="60" y1="90" x2="140" y2="180" stroke="#2A3050" stroke-width="1" />
+              <line x1="140" y1="180" x2="220" y2="90" stroke="#2A3050" stroke-width="1" />
+              <line x1="60" y1="90" x2="140" y2="180" stroke="#2A3050" stroke-width="1" stroke-dasharray="3,3" />
+              <line x1="140" y1="60" x2="140" y2="180" stroke="#2A3050" stroke-width="1" />
+              <circle class="gnode" cx="60"  cy="90"  r="8" fill="#F59E0B" />
+              <circle class="gnode" cx="140" cy="60"  r="6" fill="#F5F1E8" />
+              <circle class="gnode" cx="220" cy="90"  r="8" fill="#F59E0B" />
+              <circle class="gnode" cx="140" cy="180" r="10" fill="#F59E0B" />
+              <text x="60"  y="118" font-family="JetBrains Mono" font-size="9" fill="#8B95B7" text-anchor="middle">FB</text>
+              <text x="140" y="42"  font-family="JetBrains Mono" font-size="9" fill="#8B95B7" text-anchor="middle">X</text>
+              <text x="220" y="118" font-family="JetBrains Mono" font-size="9" fill="#8B95B7" text-anchor="middle">IG</text>
+              <text x="140" y="210" font-family="JetBrains Mono" font-size="9" fill="#F59E0B" text-anchor="middle">REDDIT · NEW</text>
+            </svg>
+            <div class="pulse p1"></div>
+            <div class="pulse p2"></div>
+            <div class="caption">Channel mesh · v0.2</div>
+          </div>
+        </div>
+        <div class="meta">
+          <div class="row"><span>Channel</span><span class="v acc">Reddit</span></div>
+          <div class="rule"></div>
+          <div class="row"><span>Plugin</span><span class="v">ee-sm v0.4</span></div>
+          <div class="row"><span>Messages</span><span class="v">327</span></div>
+          <div class="row"><span>Blocker</span><span class="v acc">VPS IP</span></div>
+        </div>
+      </div>
+      <div class="bot-bar">
+        <div>Daily Brief · §2</div>
+        <div class="progress">
+          <span class="seg on"></span><span class="seg on"></span><span class="seg"></span>
+          <span class="seg"></span><span class="seg"></span><span class="seg"></span>
+          <span class="pct">02 / 06</span>
+        </div>
+        <div>2026.06.13</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── §3 AUTH ─────────── -->
+  <section class="scene scene-s3">
+    <div class="sf s3">
+      <div class="tl-bar">
+        <div class="left">
+          <span class="ldot"></span>
+          <span>03 / Auth</span>
+          <span class="pill live">Live</span>
+        </div>
+        <div class="right">
+          <span>Google ⇄ LinkedIn</span>
+          <span class="sep">·</span>
+          <span>05:02 — 07:18</span>
+        </div>
+      </div>
+      <div class="num-col">
+        <div class="num"><span class="cur">03</span><span class="slash">/</span><span class="total">06</span><span class="lbl">Section<br/>Index</span></div>
+      </div>
+      <div class="body-col">
+        <div class="top">
+          <div class="tag">Operations · <span class="acc">Auth</span></div>
+          <h2><span class="st">OAuth</span> handshake, retried.</h2>
+          <div class="sub">Google sign-in → LinkedIn posting</div>
+        </div>
+        <p class="copy">
+          Tested LinkedIn posting via the
+          <span class="em">Google account sign-in</span> path.
+          Google sign-in failed on the OAuth consent screen —
+          <span class="em">94 messages</span> of debugging.
+          Reauth flow documented; will retry on a clean profile.
+        </p>
+      </div>
+      <div class="deco-col">
+        <div class="vis">
+          <div class="v-auth">
+            <div class="ring">
+              <div class="arc"></div>
+              <div class="core"></div>
+              <div class="lbl t">Google</div>
+              <div class="lbl r">→</div>
+              <div class="lbl b">LinkedIn</div>
+              <div class="lbl l">←</div>
+              <div class="status">⚠ oauth · retry</div>
+            </div>
+          </div>
+        </div>
+        <div class="meta">
+          <div class="row"><span>Path</span><span class="v">Google → LI</span></div>
+          <div class="rule"></div>
+          <div class="row"><span>Flow</span><span class="v acc">OAuth 2.0</span></div>
+          <div class="row"><span>Messages</span><span class="v">94</span></div>
+          <div class="row"><span>Status</span><span class="v acc">Retry</span></div>
+        </div>
+      </div>
+      <div class="bot-bar">
+        <div>Daily Brief · §3</div>
+        <div class="progress">
+          <span class="seg on"></span><span class="seg on"></span><span class="seg on"></span>
+          <span class="seg"></span><span class="seg"></span><span class="seg"></span>
+          <span class="pct">03 / 06</span>
+        </div>
+        <div>2026.06.13</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── §4 TOOLING ─────────── -->
+  <section class="scene scene-s4">
+    <div class="sf s4">
+      <div class="tl-bar">
+        <div class="left">
+          <span class="ldot"></span>
+          <span>04 / Tooling</span>
+          <span class="pill live">Live</span>
+        </div>
+        <div class="right">
+          <span>MiniMax MCP · web search</span>
+          <span class="sep">·</span>
+          <span>07:18 — 11:24</span>
+        </div>
+      </div>
+      <div class="num-col">
+        <div class="num"><span class="cur">04</span><span class="slash">/</span><span class="total">06</span><span class="lbl">Section<br/>Index</span></div>
+      </div>
+      <div class="body-col">
+        <div class="top">
+          <div class="tag">Operations · <span class="acc">Tooling</span></div>
+          <h2><span class="st">MCP</span> server, online.</h2>
+          <div class="sub">MiniMax MCP · web search capability</div>
+        </div>
+        <p class="copy">
+          Installed the <span class="em">MiniMax MCP server</span> for web search
+          and wired it into the agent runtime via
+          <span class="em">Hermes config.yaml</span>.
+          <span class="em">196 messages</span> for full setup + smoke tests.
+          Tool registry now exposes <code style="font-family:'JetBrains Mono',monospace;background:rgba(56,189,248,0.1);color:var(--cyan);padding:1px 6px;border-radius:3px">web.search</code>.
+        </p>
+      </div>
+      <div class="deco-col">
+        <div class="vis">
+          <div class="v-term">
+            <div class="dots"><span></span><span></span><span></span></div>
+            <div class="ln">$ <span class="k">mcp</span> add MiniMax-web</div>
+            <div class="ln">  <span class="s">"MiniMax/web-search"</span></div>
+            <div class="ln">↳ resolved <span class="c">v1.0.4</span></div>
+            <div class="ln">$ <span class="k">hermes</span> config apply</div>
+            <div class="ln">  · config.yaml · <span class="c">ok</span></div>
+            <div class="ln">$ <span class="k">mcp</span> ping web-search</div>
+            <div class="ok">✓ round-trip 412ms</div>
+          </div>
+        </div>
+        <div class="meta">
+          <div class="row"><span>Server</span><span class="v">MiniMax MCP</span></div>
+          <div class="rule"></div>
+          <div class="row"><span>Tool</span><span class="v acc">web.search</span></div>
+          <div class="row"><span>Messages</span><span class="v">196</span></div>
+          <div class="row"><span>Status</span><span class="v acc">Online</span></div>
+        </div>
+      </div>
+      <div class="bot-bar">
+        <div>Daily Brief · §4</div>
+        <div class="progress">
+          <span class="seg on"></span><span class="seg on"></span><span class="seg on"></span>
+          <span class="seg on"></span><span class="seg"></span><span class="seg"></span>
+          <span class="pct">04 / 06</span>
+        </div>
+        <div>2026.06.13</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── §5 INTAKE ─────────── -->
+  <section class="scene scene-s5">
+    <div class="sf s5">
+      <div class="tl-bar">
+        <div class="left">
+          <span class="ldot"></span>
+          <span>05 / Intake</span>
+          <span class="pill live">Live</span>
+        </div>
+        <div class="right">
+          <span>SAJ Electric</span>
+          <span class="sep">·</span>
+          <span>11:24 — 13:30</span>
+        </div>
+      </div>
+      <div class="num-col">
+        <div class="num"><span class="cur">05</span><span class="slash">/</span><span class="total">06</span><span class="lbl">Section<br/>Index</span></div>
+      </div>
+      <div class="body-col">
+        <div class="top">
+          <div class="tag">Operations · <span class="acc">Sales</span></div>
+          <h2><span class="st">SAJ</span> Electric, on file.</h2>
+          <div class="sub">asia.saj-electric.com</div>
+        </div>
+        <p class="copy">
+          Processed a company intake submission for
+          <span class="em">SAJ Electric</span> — residential
+          <span class="em">hybrid solar system</span>, Asia-Pacific region.
+          Routed to the solutions team with a pre-filled brief and
+          discovery call scheduled.
+        </p>
+      </div>
+      <div class="deco-col">
+        <div class="vis">
+          <div class="v-form">
+            <div class="card">
+              <div class="field">
+                <div class="lbl">Company</div>
+                <div class="val fill">SAJ Electric</div>
+              </div>
+              <div class="field">
+                <div class="lbl">Product</div>
+                <div class="val fill">Hybrid Solar · Residential</div>
+              </div>
+              <div class="field">
+                <div class="lbl">Region</div>
+                <div class="val fill">APAC</div>
+              </div>
+              <div class="field">
+                <div class="lbl">URL</div>
+                <div class="val fill">asia.saj-electric.com</div>
+              </div>
+            </div>
+            <div class="pills">
+              <span class="pill">Solar</span>
+              <span class="pill">Hybrid</span>
+              <span class="pill">B2C</span>
+              <span class="pill">APAC</span>
+            </div>
+          </div>
+        </div>
+        <div class="meta">
+          <div class="row"><span>Account</span><span class="v">SAJ Electric</span></div>
+          <div class="rule"></div>
+          <div class="row"><span>Type</span><span class="v acc">B2C · Solar</span></div>
+          <div class="row"><span>Region</span><span class="v">APAC</span></div>
+          <div class="row"><span>Status</span><span class="v acc">Filed</span></div>
+        </div>
+      </div>
+      <div class="bot-bar">
+        <div>Daily Brief · §5</div>
+        <div class="progress">
+          <span class="seg on"></span><span class="seg on"></span><span class="seg on"></span>
+          <span class="seg on"></span><span class="seg on"></span><span class="seg"></span>
+          <span class="pct">05 / 06</span>
+        </div>
+        <div>2026.06.13</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── §6 LOCAL ─────────── -->
+  <section class="scene scene-s6">
+    <div class="sf s6">
+      <div class="tl-bar">
+        <div class="left">
+          <span class="ldot"></span>
+          <span>06 / Local</span>
+          <span class="pill live">Live</span>
+        </div>
+        <div class="right">
+          <span>Google Maps · Kluang</span>
+          <span class="sep">·</span>
+          <span>13:30 — 15:48</span>
+        </div>
+      </div>
+      <div class="num-col">
+        <div class="num"><span class="cur">06</span><span class="slash">/</span><span class="total">06</span><span class="lbl">Section<br/>Index</span></div>
+      </div>
+      <div class="body-col">
+        <div class="top">
+          <div class="tag">Operations · <span class="acc">Local SEO</span></div>
+          <h2><span class="st">Maps,</span> pinned.</h2>
+          <div class="sub">Eternalgy Sdn BHD · Kluang, MY</div>
+        </div>
+        <p class="copy">
+          Worked on the <span class="em">Google Maps</span> review campaign
+          for the Kluang location of
+          <span class="em">Eternalgy Sdn BHD</span> — claim verified,
+          listing polished, review solicitation sequence drafted for
+          post-purchase flows.
+        </p>
+      </div>
+      <div class="deco-col">
+        <div class="vis">
+          <div class="v-map">
+            <div class="map-bg"></div>
+            <div class="road"></div>
+            <div class="road v"></div>
+            <div class="road h2"></div>
+            <div class="pin-shadow"></div>
+            <div class="pin-drop">
+              <div class="pin">
+                <svg viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 0C5.4 0 0 5.4 0 12c0 8 12 20 12 20s12-12 12-20C24 5.4 18.6 0 12 0z" fill="#A3E635" />
+                  <circle cx="12" cy="12" r="5" fill="#0B0E1A" />
+                </svg>
+              </div>
+            </div>
+            <div class="label">Eternalgy Sdn BHD</div>
+            <div class="stars">
+              <span>★</span><span>★</span><span>★</span><span>★</span><span>★</span>
+            </div>
+          </div>
+        </div>
+        <div class="meta">
+          <div class="row"><span>Listing</span><span class="v">Verified</span></div>
+          <div class="rule"></div>
+          <div class="row"><span>Location</span><span class="v">Kluang, MY</span></div>
+          <div class="row"><span>Rating</span><span class="v acc">4.8 ★</span></div>
+          <div class="row"><span>Status</span><span class="v acc">Live</span></div>
+        </div>
+      </div>
+      <div class="bot-bar">
+        <div>Daily Brief · §6</div>
+        <div class="progress">
+          <span class="seg on"></span><span class="seg on"></span><span class="seg on"></span>
+          <span class="seg on"></span><span class="seg on"></span><span class="seg on"></span>
+          <span class="pct">06 / 06</span>
+        </div>
+        <div>2026.06.13</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────── OUTRO ─────────── -->
+  <section class="scene scene-outro">
+    <div class="o-center">
+      <div class="o-tag">— End of Brief —</div>
+      <div class="o-display">End of Brief<span class="it">.</span></div>
+      <div class="o-underscore"></div>
+      <div class="o-by">
+        <span>Eternalgy</span>
+        <span class="vline"></span>
+        <span class="v">Daily Operations</span>
+        <span class="vline"></span>
+        <span>2026.06.13</span>
+      </div>
+    </div>
+  </section>
+</body>
+</html>

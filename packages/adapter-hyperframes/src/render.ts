@@ -1,20 +1,29 @@
 /**
- * Hyperframes render() — real recording via Playwright + ffmpeg.
+ * Hyperframes render() — deterministic frame-by-frame capture via Playwright + ffmpeg.
  *
  * Per-frame strategy (orchestrator already loops per node and concats):
  *   1. Launch chromium headless at the configured resolution
- *   2. recordVideo into a tmp dir
- *   3. file:// load the frame HTML
- *   4. wait `durationSec` so any opening animation completes + plays
- *   5. close → playwright dumps a webm
- *   6. ffmpeg transmux/encode the webm to mp4 at `outputPath`
+ *   2. file:// load the frame HTML (all animations frozen at parse time)
+ *   3. wait for web fonts, probe the animation length
+ *   4. take over the page's clock: rAF / performance.now / Date.now become
+ *      virtual, GSAP's ticker is put to sleep, CSS animations are driven
+ *      through the Web Animations API
+ *   5. for each output frame, seek every timeline to t = i/fps and screenshot
+ *   6. ffmpeg assembles the image sequence into mp4 at `outputPath`
+ *
+ * Why not Playwright's recordVideo? That is a real-time CDP screencast capped
+ * at 25fps which drops frames whenever headless chromium (software rendering,
+ * no GPU) can't keep up — measured output was ~5–8 distinct frames/sec at
+ * 1080p regardless of the requested fps. Stepping virtual time and
+ * screenshotting each frame is slower in wall-clock but every frame is
+ * pixel-perfect and the requested fps is real.
  *
  * Upstream Hyperframes was never required at runtime for this adapter —
  * our generated HTML is plain inline-CSS+JS, chromium runs it as-is.
  */
 
 import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -27,7 +36,7 @@ import type {
 } from '@html-video/core';
 import { HtmlVideoError } from '@html-video/core';
 
-const ADAPTER_VERSION = '0.2.0-playwright';
+const ADAPTER_VERSION = '0.3.0-framestep';
 
 /** Real render: chromium records the page, ffmpeg transcodes to MP4. */
 export async function render(input: RenderInput, ctx: RenderContext): Promise<RenderOutput> {
@@ -61,24 +70,19 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
   });
 
   const recordDir = await mkdtemp(join(tmpdir(), 'hv-render-'));
+  const framesDir = join(recordDir, 'frames');
+  await mkdir(framesDir, { recursive: true });
   let browser: import('playwright').Browser | undefined;
-  let webmPath: string | undefined;
   let cleanupSrc: (() => Promise<void>) | undefined;
-  // Wall-clock offset (ms) from when the webm starts recording to when we
-  // actually start the animation, so ffmpeg can trim the dead opening lead-in.
-  let leadInMs = 0;
+  let totalFrames = 0;
   try {
     browser = await playwright.chromium.launch({
       headless: true,
       args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
     });
-    // recordVideo starts capturing the moment the context exists, so this is
-    // the webm's t=0 reference.
-    const tWebmStart = Date.now();
     const context = await browser.newContext({
       viewport: { width, height },
       deviceScaleFactor: 1,
-      recordVideo: { dir: recordDir, size: { width, height } },
     });
     const page = await context.newPage();
 
@@ -104,6 +108,102 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
       else document.addEventListener('DOMContentLoaded', attach, { once: true });
       (window as unknown as { __hvUnfreeze?: () => void }).__hvUnfreeze = () => {
         document.getElementById('__hv_freeze')?.remove();
+      };
+    });
+
+    // Deterministic clock. Installed before any page script runs, but inert
+    // until __hvBeginVirtualTime() — page setup (font loading, our own
+    // evaluate() helpers) must keep running on the real clock. Once active:
+    //   - requestAnimationFrame queues callbacks instead of scheduling them;
+    //   - performance.now() / Date.now() return a frozen virtual time;
+    //   - GSAP's ticker is put to sleep so nothing advances on the wall clock;
+    //   - __hvGoTo(ms) advances the virtual time to `ms`, flushes the rAF
+    //     queue with the virtual timestamp (drives custom rAF loops), ticks
+    //     GSAP via gsap.updateRoot(), and seeks every CSS/WAAPI animation to
+    //     `ms` through the Web Animations API. The CSS freeze stylesheet stays
+    //     attached the whole time — a paused animation still renders the frame
+    //     its currentTime points at, and keeping it pinned guarantees nothing
+    //     drifts between the seek and the screenshot.
+    await page.addInitScript(() => {
+      const w = window as unknown as Record<string, unknown> & Window;
+      let active = false;
+      let vNow = 0;
+      let rafId = 1;
+      let rafQueue: Array<{ id: number; cb: FrameRequestCallback }> = [];
+      const realPerfNow = performance.now.bind(performance);
+      const realDateNow = Date.now.bind(Date);
+      let perfBase = 0;
+      let dateBase = 0;
+      let gsapBaseSec = 0;
+      type GsapLike = {
+        ticker?: { time?: number; sleep?: () => void; lagSmoothing?: (n: number) => void };
+        updateRoot?: (timeSec: number) => void;
+      };
+      (w as { __hvBeginVirtualTime?: () => void }).__hvBeginVirtualTime = () => {
+        if (active) return;
+        active = true;
+        vNow = 0;
+        perfBase = realPerfNow();
+        dateBase = realDateNow();
+        performance.now = () => perfBase + vNow;
+        Date.now = () => dateBase + vNow;
+        w.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+          const id = rafId++;
+          rafQueue.push({ id, cb });
+          return id;
+        }) as typeof requestAnimationFrame;
+        w.cancelAnimationFrame = ((id: number) => {
+          rafQueue = rafQueue.filter((e) => e.id !== id);
+        }) as typeof cancelAnimationFrame;
+        const g = (w as { gsap?: GsapLike }).gsap;
+        if (g?.ticker) {
+          try {
+            g.ticker.lagSmoothing?.(0);
+            g.ticker.sleep?.(); // stop GSAP's own rAF loop — we tick it manually
+            gsapBaseSec = g.ticker.time ?? 0;
+          } catch {
+            /* gsap variant without ticker control — rAF queue still covers it */
+          }
+        }
+      };
+      (w as { __hvGoTo?: (ms: number) => void }).__hvGoTo = (ms: number) => {
+        if (!active) return;
+        vNow = ms;
+        // Custom rAF-driven loops: run this frame's callbacks with the
+        // virtual timestamp; re-registrations land in the next frame's queue.
+        const due = rafQueue;
+        rafQueue = [];
+        for (const e of due) {
+          try {
+            e.cb(perfBase + vNow);
+          } catch {
+            /* one bad callback must not kill the capture */
+          }
+        }
+        // GSAP: manual root tick (Remotion-style external clock driving).
+        const g = (w as { gsap?: GsapLike }).gsap;
+        if (g?.updateRoot) {
+          try {
+            g.updateRoot(gsapBaseSec + ms / 1000);
+          } catch {
+            /* ignore */
+          }
+        }
+        // CSS @keyframes / transitions / WAAPI: seek via Web Animations API.
+        let anims: Animation[] = [];
+        try {
+          anims = document.getAnimations();
+        } catch {
+          /* no WAAPI — nothing to seek */
+        }
+        for (const a of anims) {
+          try {
+            a.pause();
+            a.currentTime = ms;
+          } catch {
+            /* some transitions reject seeking — ignore */
+          }
+        }
       };
     });
 
@@ -272,93 +372,63 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
       }
     } catch { /* probe failed — fall back to the requested duration */ }
 
-    // Multi-composition templates register their master timeline paused so the
-    // probe above can read its real (finite) duration. Now that the recording
-    // window is fixed, drive playback from frame zero so capture and animation
-    // start together — otherwise the auto-play fallback would have already run
-    // part of the timeline before we begin recording.
-    const drove = await page
+    // Switch the page onto the virtual clock, then start any multi-composition
+    // master timelines. They were registered paused so the probe above could
+    // read their real duration; playing them now is safe because GSAP's ticker
+    // is already asleep — they sit at t=0 until __hvGoTo drives them.
+    await page
       .evaluate(() => {
-        const w = window as unknown as { __hvPlayAll?: () => void; __hvPlayed?: boolean };
+        const w = window as unknown as {
+          __hvBeginVirtualTime?: () => void;
+          __hvPlayAll?: () => void;
+          __hvPlayed?: boolean;
+        };
+        w.__hvBeginVirtualTime?.();
         if (typeof w.__hvPlayAll === 'function') {
           w.__hvPlayed = true;
           w.__hvPlayAll();
-          return true;
         }
-        return false;
-      })
-      .catch(() => false);
-
-    // Release the animation freeze now that fonts are ready. Every template —
-    // single-file CSS keyframes and multi-composition GSAP alike — has been
-    // held at frame 0 since before goto(), so the entire recorded lead-in
-    // (page load + cold font fetch, ~2–4s) is a still hold of the first frame
-    // with no motion. Unfreezing here is the true t=0 of the animation, so the
-    // lead-in is always dead and always safe to trim. (Previously only
-    // multi-composition templates were parked, so single-file ones recorded
-    // their opening during the font wait and showed the fallback-font flash.)
-    await page
-      .evaluate(() => {
-        (window as unknown as { __hvUnfreeze?: () => void }).__hvUnfreeze?.();
       })
       .catch(() => {});
-    leadInMs = Date.now() - tWebmStart;
-    void drove; // playback already driven above for multi-composition timelines
 
-    ctx.onProgress?.(40, `recording ${totalDuration}s`);
-    // Stream a single coarse progress tick per second so the user sees
-    // "recording 1/5s …" type signal in the studio progress bar.
-    const totalMs = Math.round(totalDuration * 1000);
-    const tick = 250;
-    const start = Date.now();
-    while (Date.now() - start < totalMs) {
+    // Deterministic capture: seek every timeline to i/fps and screenshot.
+    // Wall-clock speed no longer matters — however long a screenshot takes,
+    // the page is pinned at exactly that frame's time, so the requested fps
+    // is the real fps of the output, not an aspiration.
+    totalFrames = Math.max(1, Math.round(totalDuration * fps));
+    ctx.onProgress?.(40, `capturing ${totalFrames} frames`);
+    for (let i = 0; i < totalFrames; i++) {
       if (ctx.signal?.aborted) throw new HtmlVideoError('cancelled', 'Aborted');
-      await page.waitForTimeout(Math.min(tick, totalMs - (Date.now() - start)));
-      const pct = 40 + Math.floor(((Date.now() - start) / totalMs) * 45);
-      ctx.onProgress?.(pct, 'recording');
+      const tMs = (i * 1000) / fps;
+      await page.evaluate((ms) => {
+        (window as unknown as { __hvGoTo?: (ms: number) => void }).__hvGoTo?.(ms);
+      }, tMs);
+      await page.screenshot({
+        path: join(framesDir, `frame-${String(i).padStart(6, '0')}.png`),
+        type: 'png',
+        animations: 'allow', // we drive animations ourselves — don't let playwright reset them
+        caret: 'hide',
+      });
+      const pct = 40 + Math.floor(((i + 1) / totalFrames) * 45);
+      ctx.onProgress?.(pct, `capturing frame ${i + 1}/${totalFrames}`);
     }
 
-    ctx.onProgress?.(85, 'finalising recording');
+    ctx.onProgress?.(85, 'finalising capture');
     await context.close();
-    // playwright drops the webm into recordDir; pick the freshest .webm
-    const candidates = readdirSync(recordDir).filter((f) => f.endsWith('.webm'));
-    if (candidates.length === 0) {
-      throw new HtmlVideoError('render-failed', `Playwright produced no webm in ${recordDir}`);
-    }
-    candidates.sort();
-    webmPath = join(recordDir, candidates[candidates.length - 1]!);
   } finally {
     if (browser) await browser.close().catch(() => {});
     if (cleanupSrc) await cleanupSrc().catch(() => {});
   }
 
-  // ---- ffmpeg: webm → mp4 ----
+  // ---- ffmpeg: png sequence → mp4 ----
+  // The sequence already has exactly totalFrames frames at exact frame times,
+  // so no lead-in trim, no tail padding, no -r resample: duration is
+  // totalFrames/fps by construction for both 'explicit' and 'auto'.
   ctx.onProgress?.(90, 'encoding mp4');
-  // Trim the dead lead-in (page load + font fetch before the timeline played)
-  // off the front of multi-composition webms. Back off 120ms so rounding /
-  // recorder start jitter can't clip the first real animation frame — a couple
-  // of still frames at the head are harmless, a missing opening beat is not.
-  const seekSec = leadInMs > 200 ? Math.max(0, (leadInMs - 120) / 1000) : 0;
-  // When the user set an explicit per-frame length, the output must be EXACTLY
-  // that long. The recorded webm can come up a little short (recorder start
-  // jitter, the lead-in trim, a sub-duration animation that finished early), so
-  // pad the tail by holding the last frame (`tpad stop_mode=clone`) up to the
-  // target. -t then trims to the precise length. For 'auto' we keep the old
-  // behavior (just -t, no padding) — there the duration is a soft fallback.
-  const explicit = input.config.durationMode === 'explicit';
   await runFfmpeg([
     '-y',
-    // -ss before -i = fast input seek, drops the frozen lead-in entirely.
-    ...(seekSec > 0 ? ['-ss', seekSec.toFixed(3)] : []),
-    '-i', webmPath!,
-    // Pad-then-trim so an explicit per-frame length lands exactly (e.g. user
-    // asked 4s, animation ran 2.8s → hold the final frame to fill 4s).
-    ...(explicit ? ['-vf', `tpad=stop_mode=clone:stop_duration=${totalDuration}`] : []),
-    // Force exact duration: playwright's recordVideo sometimes overshoots
-    // by the time it takes to close the context. -t trims to the requested
-    // length (seconds, accepts fractions).
-    '-t', String(totalDuration),
-    '-r', String(fps),
+    '-framerate', String(fps),
+    '-i', join(framesDir, 'frame-%06d.png'),
     '-c:v', 'libx264',
     '-pix_fmt', 'yuv420p',
     '-preset', 'medium',
@@ -379,11 +449,13 @@ export async function render(input: RenderInput, ctx: RenderContext): Promise<Re
       fileSizeBytes: st.size,
       actualResolution: input.config.resolution,
       fps,
-      renderedFrames: Math.round(totalDuration * fps),
+      renderedFrames: totalFrames,
       renderWallClockSec: (Date.now() - t0) / 1000,
       engineVersion: `hyperframes-playwright@${ADAPTER_VERSION}`,
     },
-    diagnostics: [`recorded via playwright/chromium then encoded with ffmpeg (libx264 crf20)`],
+    diagnostics: [
+      `deterministic frame-by-frame capture (${totalFrames} screenshots @ ${fps}fps) encoded with ffmpeg (libx264 crf20)`,
+    ],
   };
 }
 

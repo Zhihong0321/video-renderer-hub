@@ -82,7 +82,7 @@ Picking the right engine per use case, learning each model, and stitching them i
 
 The same idea powers [Open Design](https://github.com/nexu-io/open-design) in the *design* space — an agent meta-layer over many tools. html-video is the *motion* counterpart from the same team.
 
-> **Status:** the pluggable-engine architecture is in place, and the **Hyperframes engine is fully wired up and renders real MP4** — headless Chromium records the animated HTML frame-by-frame and ffmpeg encodes it (libx264). Remotion, Motion Canvas / Revideo, and Manim are on the roadmap: the adapter interface is designed for them, but their adapters aren't built yet. The "In html-video" column above is the single source of truth for what's actually runnable today.
+> **Status:** the pluggable-engine architecture is in place, and the **Hyperframes engine is fully wired up and renders real MP4** — headless Chromium captures the animated HTML frame-by-frame under a stepped virtual clock (every output frame is a pixel-perfect screenshot at exactly i/fps — true 60fps, no dropped frames) and ffmpeg encodes it (libx264). Remotion, Motion Canvas / Revideo, and Manim are on the roadmap: the adapter interface is designed for them, but their adapters aren't built yet. The "In html-video" column above is the single source of truth for what's actually runnable today.
 
 ---
 
@@ -91,7 +91,7 @@ The same idea powers [Open Design](https://github.com/nexu-io/open-design) in th
 | | |
 |---|---|
 | **Coding agents (14)** | Open Design (Vela) · Windsurf CLI · Trae CLI · Claude Code · Cursor Agent · Codex CLI · Gemini CLI · Grok Build · Qwen Code · OpenCode · GitHub Copilot CLI · Aider · Hermes · Anthropic Messages API — auto-detected on your `PATH`, switchable from the top bar. |
-| **Real MP4 render** | Headless Chromium records the animated HTML and ffmpeg encodes it (libx264) — locally, no cloud render, no per-clip fee. |
+| **Real MP4 render** | Headless Chromium captures the animated HTML frame-by-frame (true 60fps) and ffmpeg encodes it (libx264) — locally, no cloud render, no per-clip fee. |
 | **Article / repo → video** | Paste a URL or GitHub repo; the studio fetches it server-side (handles WeChat 公众号 articles) and builds the video from the real content. |
 | **21 templates** | Curated, license-clean patterns: data viz, product promos, social shorts, explainers, kinetic type, transitions — previewed live in the gallery. |
 | **Multi-frame storyboards** | A content-graph drives multi-scene videos; edit per-frame text inline, reorder, re-render. |
@@ -121,10 +121,12 @@ One sentence (or one link) goes in; a real MP4 comes out. The pipeline is the sa
   ④ per-frame HTML      each node becomes a self-contained animated HTML frame on disk
         │
         ▼
-  ⑤ Hyperframes render  headless Chromium loads each frame, records it (auto-extending to
-        │               cover the frame's own animation), → webm per frame
+  ⑤ Hyperframes render  headless Chromium loads each frame, steps virtual time to exactly
+        │               i/fps and screenshots every frame (deterministic — the requested
+        │               fps is the real fps, auto-extending to cover the frame's own
+        │               animation) → PNG sequence per frame
         ▼
-  ⑥ ffmpeg              each webm → mp4 (libx264), then concat into one video;
+  ⑥ ffmpeg              each PNG sequence → mp4 (libx264), then concat into one video;
         │               optional MiniMax music + narration mixed in
         ▼
       your.mp4
@@ -165,7 +167,7 @@ Whatever the source, it becomes the material the video is actually built from �
 | **ffmpeg** | Any recent | `ffmpeg -version` |
 | **Chromium** (or Playwright browsers) | — | `npx playwright install chromium` |
 
-The default rendering engine records animated HTML in a headless Chromium browser, then uses ffmpeg (libx264) to encode MP4. Install Playwright's Chromium if you don't have a system install:
+The default rendering engine captures animated HTML frame-by-frame in a headless Chromium browser, then uses ffmpeg (libx264) to encode MP4. Install Playwright's Chromium if you don't have a system install:
 
 ```bash
 npx playwright install chromium
