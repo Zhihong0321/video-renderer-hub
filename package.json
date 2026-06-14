@@ -10,7 +10,7 @@
     "url": "git+https://github.com/nexu-io/html-video.git"
   },
   "engines": {
-    "node": ">=20",
+    "node": ">=22",
     "pnpm": ">=9"
   },
   "packageManager": "pnpm@9.15.0",
@@ -19,6 +19,7 @@
     "templates/*"
   ],
   "scripts": {
+    "start": "node webui/server.mjs",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
