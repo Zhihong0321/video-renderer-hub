@@ -40,6 +40,14 @@ export async function runWorker(opts: WorkerOpts): Promise<void> {
 }
 
 async function processJob(server: string, headers: Record<string, string>, workerId: string, job: { id: string; prompt: string }, projectRoot: string): Promise<void> {
+  // Agent task: a prompt prefixed with "/agent " is a dev/maintenance task, not a
+  // video. Run Claude headless in the repo with full tools and report what it did.
+  // This is how the WebUI drives + fixes the Mac mini itself (no human relay).
+  const agentTask = parseAgentTask(job.prompt);
+  if (agentTask !== null) {
+    return runAgentJob(server, headers, job, projectRoot, agentTask);
+  }
+
   const workDir = await mkdtemp(join(tmpdir(), 'hv-worker-'));
   const outputPath = join(workDir, 'final.mp4');
 
@@ -64,6 +72,75 @@ async function processJob(server: string, headers: Record<string, string>, worke
     const message = err instanceof Error ? err.message : String(err);
     await postJson(`${server}/api/worker/jobs/${job.id}/fail`, headers, { error: message }).catch(() => {});
   }
+}
+
+// Returns the task text if the prompt is an agent task ("/agent <task>"), else null.
+function parseAgentTask(prompt: string): string | null {
+  const m = (prompt || '').trim().match(/^\/agent\b[ \t]*([\s\S]*)$/i);
+  return m ? (m[1] ?? '').trim() : null;
+}
+
+const AGENT_TIMEOUT_MS = 20 * 60 * 1000; // 20 min — a hung claude must not freeze the worker forever
+
+// Run Claude headless in the repo with full tools (edit/bash/build/git), then post
+// the result back as the job message and mark it completed. No new server endpoint
+// or schema needed — works against the existing queue. The agent is expected to
+// `git push` real code changes; the message is its summary of what it did.
+async function runAgentJob(
+  server: string,
+  headers: Record<string, string>,
+  job: { id: string; prompt: string },
+  projectRoot: string,
+  task: string,
+): Promise<void> {
+  const progressUrl = `${server}/api/worker/jobs/${job.id}/progress`;
+  try {
+    if (!task) {
+      await postJson(progressUrl, headers, { status: 'failed', progress: 100, message: 'Empty agent task' });
+      return;
+    }
+    progress('agent', 20, { job_id: job.id });
+    await postJson(progressUrl, headers, { status: 'rendering', progress: 20, message: 'Running agent task' });
+
+    const { out, err, code, timedOut } = await runCapture(
+      'claude',
+      ['--dangerously-skip-permissions', '--permission-mode', 'bypassPermissions', '-p', task],
+      { cwd: projectRoot, timeoutMs: AGENT_TIMEOUT_MS },
+    );
+
+    const combined = [out.trim(), err.trim()].filter(Boolean).join('\n').trim();
+    const transcript = combined || '(agent produced no output)';
+    // The queue's message field carries the result. Cap to keep payloads sane;
+    // the real artifact is whatever the agent committed/pushed.
+    const message = (timedOut ? '[TIMED OUT after 20m]\n' : '') + transcript.slice(-6000);
+    const status = timedOut ? 'failed' : 'completed';
+    progress('agent-done', 100, { job_id: job.id, code, timed_out: timedOut });
+    await postJson(progressUrl, headers, { status, progress: 100, message });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await postJson(progressUrl, headers, { status: 'failed', progress: 100, message: `agent error: ${msg}` }).catch(() => {});
+  }
+}
+
+// Like run(), but always resolves with both streams + exit code (never throws on
+// nonzero), and enforces a timeout that kills the child. For agent tasks, the
+// output is useful even when claude exits nonzero.
+function runCapture(
+  command: string,
+  args: string[],
+  opts: { cwd?: string; timeoutMs?: number } = {},
+): Promise<{ out: string; err: string; code: number | null; timedOut: boolean }> {
+  return new Promise((resolveP) => {
+    const child = spawn(command, args, { cwd: opts.cwd, shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = '', timedOut = false;
+    const timer = opts.timeoutMs
+      ? setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, opts.timeoutMs)
+      : null;
+    child.stdout.on('data', (c) => (out += c.toString()));
+    child.stderr.on('data', (c) => (err += c.toString()));
+    child.on('error', (e) => { if (timer) clearTimeout(timer); resolveP({ out, err: err + String(e), code: null, timedOut }); });
+    child.on('close', (code) => { if (timer) clearTimeout(timer); resolveP({ out, err, code, timedOut }); });
+  });
 }
 
 // §5 Layer-2 hard gate. Cheap checks, no ImageMagick, no PIL.
