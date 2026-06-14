@@ -39,7 +39,7 @@ cli
     setJsonMode(!!opts.json);
     if (!opts.output) fail('invalid-input', '--output required');
     const ctx = await bootstrap({ cwd: opts.cwd });
-    await makeVideo(ctx.projectRoot, prompt, {
+    await makeVideo(ctx, prompt, {
       output: opts.output,
     });
   });

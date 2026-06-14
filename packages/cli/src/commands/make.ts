@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import {
   copyFile,
+  cp,
   mkdtemp,
   mkdir,
   readFile,
@@ -10,10 +11,19 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import type { CliContext } from '../context.js';
 import { fail, ok, progress } from '../output.js';
 
 interface MakeOptions {
   output: string;
+}
+
+interface TemplateBrief {
+  id: string;
+  name: string;
+  bestFor: string[];
+  category: string;
+  entry: string; // path to the template's source HTML, relative to the work dir
 }
 
 interface ManifestSection {
@@ -53,7 +63,8 @@ interface VerificationResult {
   tts: Array<{ id: string; bytes: number; durationSec: number }>;
 }
 
-export async function makeVideo(projectRoot: string, promptText: string, opts: MakeOptions): Promise<void> {
+export async function makeVideo(ctx: CliContext, promptText: string, opts: MakeOptions): Promise<void> {
+  const projectRoot = ctx.projectRoot;
   const outputPath = resolve(opts.output);
   const skillPath = join(projectRoot, 'workflows', 'speech-video.md');
   const skillText = await readFile(skillPath, 'utf8').catch((err) => {
@@ -82,12 +93,17 @@ export async function makeVideo(projectRoot: string, promptText: string, opts: M
       progress('scratch', 5, { attempt, work_dir: workDir });
       await prepareScratchDir(workDir);
 
+      // Pre-filter premium templates in code; Claude picks + adapts (best-effort).
+      const templates = await provideTemplates(workDir, ctx, promptText);
+      progress('templates', 10, { attempt, count: templates.length, ids: templates.map((t) => t.id) });
+
       progress('author', 15, { attempt });
       await authorSlides({
         workDir,
         promptText,
         skillText,
         language: detectLanguage(promptText),
+        templates,
       });
       const slidesFile = await readSlidesFile(workDir);
       await assertAuthoredFiles(workDir, slidesFile);
@@ -131,13 +147,51 @@ async function prepareScratchDir(workDir: string): Promise<void> {
   await mkdir(join(workDir, 'narration'), { recursive: true });
 }
 
+/**
+ * Shortlist premium templates for the prompt (code pre-filters) and copy their
+ * source into the work dir so Claude can read + adapt them (Claude finalizes).
+ * Best-effort: any failure returns [] and Claude authors from scratch — never a
+ * hard failure point. This is NOT runtime string-fill; Claude adapts the HTML.
+ */
+async function provideTemplates(workDir: string, ctx: CliContext, promptText: string): Promise<TemplateBrief[]> {
+  try {
+    // Omit enginesAvailable so the shortlist is never empty-filtered; all our
+    // templates render through the same hyperframes framestep adapter anyway.
+    const matches = ctx.templates.search({ intent: promptText, top: 4 });
+    if (!matches.length) return [];
+    const destRoot = join(workDir, 'templates');
+    await mkdir(destRoot, { recursive: true });
+
+    const briefs: TemplateBrief[] = [];
+    for (const { template: t } of matches) {
+      const dir = (t as { __dir?: string }).__dir;
+      if (!dir || !existsSync(dir)) continue;
+      const srcDir = existsSync(join(dir, 'source')) ? join(dir, 'source') : dir;
+      const entryFile = t.source_entry || 'index.html';
+      if (!existsSync(join(srcDir, entryFile))) continue;
+      await cp(srcDir, join(destRoot, t.id), { recursive: true });
+      briefs.push({
+        id: t.id,
+        name: t.name,
+        bestFor: t.best_for ?? [],
+        category: t.category ?? '',
+        entry: `templates/${t.id}/${entryFile}`,
+      });
+    }
+    return briefs;
+  } catch {
+    return [];
+  }
+}
+
 async function authorSlides(args: {
   workDir: string;
   promptText: string;
   skillText: string;
   language: string;
+  templates: TemplateBrief[];
 }): Promise<void> {
-  const prompt = buildClaudePrompt(args.promptText, args.skillText, args.language);
+  const prompt = buildClaudePrompt(args.promptText, args.skillText, args.language, args.templates);
   await run('claude', [
     '--bare',
     '--dangerously-skip-permissions',
@@ -148,11 +202,30 @@ async function authorSlides(args: {
   ], { cwd: args.workDir });
 }
 
-function buildClaudePrompt(promptText: string, skillText: string, language: string): string {
+function buildClaudePrompt(promptText: string, skillText: string, language: string, templates: TemplateBrief[]): string {
+  const templateBlock = templates.length
+    ? [
+        'PREMIUM TEMPLATES — start from these, do not invent slides from scratch:',
+        'The following premium HTML templates have been copied into ./templates/.',
+        'They have professional CSS animations, typography and layout. Use them.',
+        ...templates.map(
+          (t) => `- ${t.id} (${t.category || 'general'}) — best for: ${(t.bestFor || []).join(', ') || 'general'}. Source: ${t.entry}`,
+        ),
+        'For each slide: pick the best-fitting template above, READ its source HTML,',
+        'and produce slides/<id>.html that REUSES its visual design + CSS animations',
+        'but with the real content for this topic swapped in. Adapt intelligently —',
+        'edit headings/text/colors to fit; keep the motion and the look.',
+        'Each slides/<id>.html MUST be self-contained: inline all CSS; keep Google',
+        'Fonts <link> tags if the template uses them; do NOT reference ../templates',
+        'or any external local file (the slide is rendered from slides/ in isolation).',
+      ].join('\n')
+    : 'No templates available — author clean self-contained slides yourself.';
+
   return [
     'You are writing only creative content for a narrated video.',
     'Read and follow these authoring rules exactly:',
     skillText,
+    templateBlock,
     'Task:',
     promptText,
     `Language: ${language}`,
@@ -163,6 +236,7 @@ function buildClaudePrompt(promptText: string, skillText: string, language: stri
     'For every slide with narrated:true, create narration/<id>.txt.',
     'Requirements:',
     '- Use between 2 and 8 slides total.',
+    '- Prefer adapting a premium template above over building a slide from scratch.',
     '- Usually include a silent cover and a silent outro when that helps clarity.',
     '- One idea per slide.',
     '- Make the visuals obviously non-blank and strongly visible.',
