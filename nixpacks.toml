@@ -1,0 +1,13 @@
+# The WebUI server (webui/server.mjs) uses only Node built-ins (node:http,
+# node:sqlite) + its own .mjs files — zero npm dependencies. Skip install/build
+# entirely so the deploy doesn't need a lockfile or node_modules.
+providers = ["node"]
+
+[phases.install]
+cmds = ["echo 'webui server has no npm deps — skipping install'"]
+
+[phases.build]
+cmds = ["echo 'no build step for webui server'"]
+
+[start]
+cmd = "node webui/server.mjs"
