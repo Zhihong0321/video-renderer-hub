@@ -114,6 +114,12 @@ function run(command: string, args: string[], opts: { cwd?: string } = {}): Prom
     child.stdout.on('data', (c) => (out += c.toString()));
     child.stderr.on('data', (c) => (err += c.toString()));
     child.on('error', rejectP);
-    child.on('close', (code) => (code === 0 ? resolveP(out.trim()) : rejectP(new Error(`${command} exit ${code}: ${err.slice(-1500)}`))));
+    child.on('close', (code) => {
+      if (code === 0) return resolveP(out.trim());
+      // hv make reports failures as JSON on STDOUT (via fail()), not stderr.
+      // Include both streams so the real reason reaches the queue, not "exit 1:".
+      const detail = [out.trim(), err.trim()].filter(Boolean).join('\n').slice(-2000);
+      rejectP(new Error(`${command} exit ${code}: ${detail || '(no output)'}`));
+    });
   });
 }
