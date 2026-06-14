@@ -392,12 +392,18 @@ async function verifyOutput(workDir: string, manifest: ManifestFile): Promise<Ve
 
   const times = buildSampleTimes(durationSec);
   const sampledFrames = [];
+  let nonBlank = 0;
   for (const timeSec of times) {
     const frame = await sampleFrameSignalStats(finalPath, timeSec);
     sampledFrames.push(frame);
-    if (frame.ymax <= frame.ymin) {
-      throw new Error(`Blank-frame check failed at ${timeSec.toFixed(2)}s`);
-    }
+    if (frame.ymax > frame.ymin) nonBlank++;
+  }
+  // A real video shows content for most of its body. Premium templates fade in
+  // from black, so an edge frame can be legitimately blank — that's NOT a white
+  // screen. A true white screen is blank everywhere. Require a majority of body
+  // samples to have content.
+  if (nonBlank < Math.ceil(times.length / 2)) {
+    throw new Error(`Blank-frame check failed: only ${nonBlank}/${times.length} sampled frames had content (likely a true blank render)`);
   }
 
   return {
@@ -461,8 +467,10 @@ function computeExpectedDuration(
 }
 
 function buildSampleTimes(durationSec: number): number[] {
-  const safeEnd = Math.max(0.2, durationSec - 0.2);
-  return [0.2, Math.max(0.2, durationSec / 2), safeEnd];
+  // Sample inside the body (15%–85%), NOT the very start/end where intro and
+  // outro fades live. Sampling t=0.2s wrongly flagged fade-in templates as blank.
+  const d = Math.max(0.4, durationSec);
+  return [0.15, 0.35, 0.5, 0.65, 0.85].map((f) => Math.min(d - 0.1, Math.max(0.1, d * f)));
 }
 
 async function sampleFrameSignalStats(

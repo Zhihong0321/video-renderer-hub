@@ -156,12 +156,14 @@ async function hardGate(filePath: string): Promise<{ ok: boolean; reason?: strin
   const duration = Number((await run('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', filePath])).trim());
   if (!(duration > 0)) return { ok: false, reason: 'duration is zero' };
 
-  // Sample one frame at t=0.2s and assert non-blank via signalstats (YMIN < YMAX).
-  const stats = await run('ffmpeg', ['-hide_banner', '-ss', '0.2', '-i', filePath, '-frames:v', '1', '-vf', 'signalstats,metadata=print:file=-', '-f', 'null', '-']);
+  // Sample at the MIDDLE of the video (not the intro), so a fade-in from black
+  // isn't mistaken for a white screen. signalstats YMIN < YMAX = has content.
+  const mid = Math.max(0.2, duration / 2).toFixed(2);
+  const stats = await run('ffmpeg', ['-hide_banner', '-ss', mid, '-i', filePath, '-frames:v', '1', '-vf', 'signalstats,metadata=print:file=-', '-f', 'null', '-']);
   const ymin = Number((stats.match(/lavfi\.signalstats\.YMIN=(\d+(?:\.\d+)?)/) || [])[1]);
   const ymax = Number((stats.match(/lavfi\.signalstats\.YMAX=(\d+(?:\.\d+)?)/) || [])[1]);
   if (!Number.isFinite(ymin) || !Number.isFinite(ymax) || ymax <= ymin) {
-    return { ok: false, reason: 'blank frame at t=0.2s (YMIN>=YMAX)' };
+    return { ok: false, reason: `blank frame at t=${mid}s (YMIN>=YMAX)` };
   }
   return { ok: true, info: { duration, streams: types, ymin, ymax, size: fileStat.size } };
 }
