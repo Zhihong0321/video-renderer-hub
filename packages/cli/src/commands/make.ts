@@ -10,7 +10,7 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { CliContext } from '../context.js';
 import { fail, ok, progress } from '../output.js';
 
@@ -157,18 +157,29 @@ async function provideTemplates(workDir: string, ctx: CliContext, promptText: st
   try {
     // Omit enginesAvailable so the shortlist is never empty-filtered; all our
     // templates render through the same hyperframes framestep adapter anyway.
-    const matches = ctx.templates.search({ intent: promptText, top: 4 });
+    // Search a few extra: some entries are skipped below (non-HTML/native).
+    const matches = ctx.templates.search({ intent: promptText, top: 6 });
     if (!matches.length) return [];
     const destRoot = join(workDir, 'templates');
     await mkdir(destRoot, { recursive: true });
 
     const briefs: TemplateBrief[] = [];
     for (const { template: t } of matches) {
+      if (briefs.length >= 4) break;
       const dir = (t as { __dir?: string }).__dir;
       if (!dir || !existsSync(dir)) continue;
       const srcDir = existsSync(join(dir, 'source')) ? join(dir, 'source') : dir;
-      const entryFile = t.source_entry || 'index.html';
-      if (!existsSync(join(srcDir, entryFile))) continue;
+      // source_entry is declared inconsistently across templates: some "index.html",
+      // some "source/index.html". Resolve by basename within srcDir, and skip
+      // non-HTML entries (e.g. Remotion native .ts/.tsx bundles can't be adapted).
+      const entryBase = basename(t.source_entry || 'index.html');
+      if (!/\.html?$/i.test(entryBase)) continue;
+      const entryFile = existsSync(join(srcDir, entryBase))
+        ? entryBase
+        : existsSync(join(srcDir, 'index.html'))
+          ? 'index.html'
+          : '';
+      if (!entryFile) continue;
       await cp(srcDir, join(destRoot, t.id), { recursive: true });
       briefs.push({
         id: t.id,
