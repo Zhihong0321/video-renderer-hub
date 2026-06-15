@@ -12,7 +12,10 @@ function read(name, fallback) {
 export const HOST = read('HOST', '0.0.0.0');
 export const PORT = Number(read('PORT', '3000'));
 export const WEBUI_ROOT = resolve(read('WEBUI_ROOT', process.cwd()));
-const dataDirEnv = read('DATA_DIR', 'data');
+// Persist on the Railway volume when it is mounted (/storage). Fall back to a
+// container-local ./data folder for local dev. DATA_DIR env still overrides.
+// This is what keeps result mp4s + the job DB alive across redeploys.
+const dataDirEnv = read('DATA_DIR', existsSync('/storage') ? '/storage' : 'data');
 export const DATA_DIR = resolve(isAbsolute(dataDirEnv) ? dataDirEnv : join(WEBUI_ROOT, dataDirEnv));
 export const RESULTS_DIR = resolve(join(DATA_DIR, read('RESULTS_SUBDIR', 'results')));
 export const DB_PATH = resolve(join(DATA_DIR, read('DB_FILENAME', 'webui.sqlite')));

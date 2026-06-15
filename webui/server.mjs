@@ -88,7 +88,14 @@ const server = createServer(async (req, res) => {
       requireRequester(req);
       const job = await getJob(resultMatch[1]);
       if (!job) return json(res, 404, { error: 'job not found' });
-      if (job.status !== 'completed' || !job.result_path || !existsSync(job.result_path)) {
+      // Prefer the stored path, but fall back to the canonical location under
+      // the current RESULTS_DIR so a stale absolute path (e.g. from before the
+      // volume was mounted) does not lose an otherwise-present file.
+      const resultPath =
+        job.result_path && existsSync(job.result_path)
+          ? job.result_path
+          : join(RESULTS_DIR, job.id, 'output.mp4');
+      if (job.status !== 'completed' || !existsSync(resultPath)) {
         return json(res, 404, { error: 'result not ready' });
       }
       res.writeHead(200, {
@@ -96,7 +103,7 @@ const server = createServer(async (req, res) => {
         'content-disposition': `inline; filename="${job.result_filename || `${job.id}.mp4`}"`,
         'cache-control': 'private, max-age=3600',
       });
-      createReadStream(job.result_path).pipe(res);
+      createReadStream(resultPath).pipe(res);
       return;
     }
 
