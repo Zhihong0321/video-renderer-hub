@@ -85,7 +85,9 @@ const server = createServer(async (req, res) => {
 
     const resultMatch = url.pathname.match(/^\/api\/jobs\/([^/]+)\/result\.mp4$/);
     if (method === 'GET' && resultMatch?.[1]) {
-      requireRequester(req);
+      // Capability URL: the 128-bit random job id is the secret, so no auth
+      // header is required here. This lets the result.mp4 link be opened or
+      // shared directly in a browser (a click cannot send a Bearer header).
       const job = await getJob(resultMatch[1]);
       if (!job) return json(res, 404, { error: 'job not found' });
       // Prefer the stored path, but fall back to the canonical location under

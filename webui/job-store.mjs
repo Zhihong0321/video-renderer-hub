@@ -187,9 +187,14 @@ export function listWorkers() {
 
 export function publicJob(job, publicBaseUrl) {
   if (!job) return null;
+  // Normalize the base so the link is always absolute & clickable. PUBLIC_BASE_URL
+  // is often set without a scheme (e.g. "video-renderer.up.railway.app"), which a
+  // browser treats as a relative path and doubles the domain → 404.
+  const base = publicBaseUrl ? publicBaseUrl.replace(/\/$/, '') : '';
+  const absBase = base && !/^https?:\/\//i.test(base) ? `https://${base}` : base;
   const result_url =
-    job.status === 'completed' && job.result_path && publicBaseUrl
-      ? `${publicBaseUrl.replace(/\/$/, '')}/api/jobs/${job.id}/result.mp4`
+    job.status === 'completed' && job.result_path && absBase
+      ? `${absBase}/api/jobs/${job.id}/result.mp4`
       : null;
   return {
     id: job.id,
